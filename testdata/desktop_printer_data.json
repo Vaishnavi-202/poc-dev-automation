@@ -1,0 +1,89 @@
+{
+
+  "app_title":"HP Smart",
+  "backend":"uia",
+  "email": "stagestack26@yopmail.com",
+  "password": "TestPassword123!",
+  "address": "2137-2101 Hilton Ave",
+  "city": "Fairbanks",
+  "state": "Alaska",
+  "state_short": "AK",
+  "user_name": "Stage Stack",
+  "zip": "99701-4026",
+  "phone": "9999955555",
+  "promo_code": "ASCENT!2",
+  
+
+  "selected_plan": "50-page-plan",
+  "redeemed_months" : "5",
+  "Free_Months":"2 months",
+  "prepaid_credits":"$12.49",
+  "origami_addon_credits": "2.49",
+
+
+   "11949":"2 months",
+   "12607":"1 month",
+    "12608":"5$",
+    "10402":"10$",
+    "ASENT12":"3 months",
+
+
+   "printers": {
+    "printer1": "HP ENVY OFFICEdeskjet 8130e",
+    "printer2": "HP Deskjet 2900",
+    "printer3": "HP ENVY 7900"
+  },
+
+  "printer1": "HP ENVY OFFICEdeskjet 8130e",
+  "printer2": "HP Deskjet 2900",
+
+
+  "price":"$5.49/month + tax",
+  "trial_months":"4 month trial ends 02/14/2026",
+  "trial_end_date":"02/14/2026",
+ 
+
+  "original-serial": "TH3A2B9X0P",
+  "original-sku": "3XV29A",
+  "new-serial": "CN9G8D4L2T",
+  "new-sku": "5SD77A",
+
+  "Accountid":"9002929889",
+  "Expirtiondate":"07/10/2025",
+  "make_date":"30/09/2025",
+  "reminder_date":"30/09/2025",
+  "delivered_date":"30/09/2025",
+  "delivered_date2":"01/10/2025",
+  "class_id":"01/11/2025",
+  "offer_detail":"14",
+  "offer_id":"9",
+
+
+   "success_message": "Promotion Applied",
+    "breakdown_section": "Breakdown of credits",
+    "payment_methos_msg":"A payment method is needed on file to enroll in HP Instant Ink",
+    "Invalid_message":"Oops! Invalid code. Please try again.",
+
+    "applied_successfully_message": "Applied successfully message should be displayed",
+    "notification_display_message": "Notification message should be displayed",
+    "breakdown_code_name_message": "Code name should be displayed in breakdown",
+    "breakdown_trial_months_message": "Trial months should be displayed in breakdown",
+    "breakdown_free_months_message":"Free months info should be displayed in breakdown",
+
+
+    "32_shift":"32",
+    "14_shift":"14",
+    "40_shift":"40",
+    "us_region":"US",
+
+
+    "paypal_payment_type":"paypal",
+
+  "billing": {
+    "card_number": "4111111111111111",
+    "exp_month": "01",
+    "exp_year": "2025",
+    "cvv": "123"
+  }
+  
+ }

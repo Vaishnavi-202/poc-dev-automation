@@ -1,0 +1,490 @@
+pipeline {
+    agent any
+    
+    parameters {
+        choice(
+            name: 'PLATFORM',
+            choices: ['android', 'ios', 'both'],
+            description: 'Mobile platform to test'
+        )
+        choice(
+            name: 'TEST_LEVEL',
+            choices: ['smoke', 'regression', 'full'],
+            description: 'Test level to run'
+        )
+        choice(
+            name: 'DEVICE_TYPE',
+            choices: ['physical', 'emulator', 'both'],
+            description: 'Type of device to test on'
+        )
+        booleanParam(
+            name: 'CLEAN_WORKSPACE',
+            defaultValue: true,
+            description: 'Clean workspace before running tests'
+        )
+        booleanParam(
+            name: 'START_APPIUM_SERVER',
+            defaultValue: true,
+            description: 'Start Appium server automatically'
+        )
+        booleanParam(
+            name: 'CAPTURE_SCREENSHOTS',
+            defaultValue: true,
+            description: 'Capture screenshots during test execution'
+        )
+        booleanParam(
+            name: 'GENERATE_UI_TREE',
+            defaultValue: true,
+            description: 'Generate UI tree XML files for debugging'
+        )
+        string(
+            name: 'DEVICE_UDID',
+            defaultValue: 'auto',
+            description: 'Specific device UDID (use "auto" for automatic detection)'
+        )
+        string(
+            name: 'APPIUM_PORT',
+            defaultValue: '4723',
+            description: 'Appium server port'
+        )
+    }
+    
+    environment {
+        PYTHON_PATH = "${WORKSPACE}"
+        VENV_DIR = ".venv"
+        VENV_PATH = "${WORKSPACE}/.venv"
+        REPORTS_DIR = "${WORKSPACE}/Reports"
+        SCREENSHOTS_DIR = "${WORKSPACE}/Screenshots"
+        MOBILE_REPORTS_DIR = "${WORKSPACE}/Reports/Mobile"
+        MOBILE_SCREENSHOTS_DIR = "${WORKSPACE}/Screenshots/Mobile"
+        APPIUM_PORT = "${params.APPIUM_PORT}"
+        DEVICE_UDID = "${params.DEVICE_UDID}"
+    }
+    
+    stages {
+        stage('Preparation') {
+            steps {
+                script {
+                    echo "Starting HP Mobile Automation Pipeline"
+                    echo "Platform: ${params.PLATFORM}"
+                    echo "Test Level: ${params.TEST_LEVEL}"
+                    echo "Device Type: ${params.DEVICE_TYPE}"
+                    echo "Device UDID: ${params.DEVICE_UDID}"
+                    echo "Appium Port: ${params.APPIUM_PORT}"
+                    echo "Start Appium Server: ${params.START_APPIUM_SERVER}"
+                    echo "Capture Screenshots: ${params.CAPTURE_SCREENSHOTS}"
+                    echo "Generate UI Tree: ${params.GENERATE_UI_TREE}"
+                }
+                
+                // Clean workspace if requested
+                when {
+                    expression { params.CLEAN_WORKSPACE }
+                }
+                steps {
+                    cleanWs()
+                }
+            }
+        }
+        
+        stage('Checkout') {
+            steps {
+                git branch: 'master', url: 'https://github.azc.ext.hp.com/srinath-gali/InstantInk_UI_Automation.git'
+            }
+        }
+        
+        stage('Environment Setup') {
+            steps {
+                script {
+                    // Create virtual environment (cross-platform)
+                    if (isUnix()) {
+                        sh """
+                            python3 -m venv ${VENV_DIR}
+                            source ${VENV_DIR}/bin/activate
+                            pip install --upgrade pip
+                            pip install -r requirements.txt
+                        """
+                    } else {
+                        bat """
+                            python -m venv ${VENV_DIR}
+                            ${VENV_DIR}\\Scripts\\activate
+                            pip install --upgrade pip
+                            pip install -r requirements.txt
+                        """
+                    }
+                }
+            }
+        }
+        
+        stage('Mobile Prerequisites Check') {
+            steps {
+                script {
+                    // Check if required mobile tools are available
+                    if (isUnix()) {
+                        sh """
+                            source ${VENV_DIR}/bin/activate
+                            python -c "import appium; print('Appium Python Client available')"
+                            python -c "import pytest; print('Pytest available')"
+                            
+                            # Check ADB
+                            adb version
+                            
+                            # Check if Appium is installed
+                            appium --version || echo "Appium not found, will install"
+                            
+                            # Check connected devices
+                            adb devices
+                        """
+                    } else {
+                        bat """
+                            ${VENV_DIR}\\Scripts\\activate
+                            python -c "import appium; print('Appium Python Client available')"
+                            python -c "import pytest; print('Pytest available')"
+                            
+                            # Check ADB
+                            adb version
+                            
+                            # Check if Appium is installed
+                            appium --version || echo "Appium not found, will install"
+                            
+                            # Check connected devices
+                            adb devices
+                        """
+                    }
+                }
+            }
+        }
+        
+        stage('Appium Server Setup') {
+            when {
+                expression { params.START_APPIUM_SERVER }
+            }
+            steps {
+                script {
+                    // Start Appium server
+                    if (isUnix()) {
+                        sh """
+                            # Kill any existing Appium processes
+                            pkill -f appium || true
+                            
+                            # Start Appium server in background
+                            nohup appium -a 0.0.0.0 -p ${APPIUM_PORT} > appium.log 2>&1 &
+                            
+                            # Wait for server to start
+                            sleep 10
+                            
+                            # Check if server is running
+                            curl -f http://localhost:${APPIUM_PORT}/status || echo "Appium server not responding"
+                        """
+                    } else {
+                        bat """
+                            # Kill any existing Appium processes
+                            taskkill /f /im node.exe 2>nul || echo "No existing Appium processes"
+                            
+                            # Start Appium server in background
+                            start /b appium -a 0.0.0.0 -p ${APPIUM_PORT} > appium.log 2>&1
+                            
+                            # Wait for server to start
+                            timeout /t 10 /nobreak >nul
+                            
+                            # Check if server is running
+                            curl -f http://localhost:${APPIUM_PORT}/status || echo "Appium server not responding"
+                        """
+                    }
+                }
+            }
+        }
+        
+        stage('Device Preparation') {
+            steps {
+                script {
+                    // Prepare mobile devices
+                    if (isUnix()) {
+                        sh """
+                            source ${VENV_DIR}/bin/activate
+                            
+                            # Check device connectivity
+                            adb devices
+                            
+                            # Enable USB debugging if needed
+                            adb shell settings put global development_settings_enabled 1
+                            
+                            # Set device to stay awake
+                            adb shell settings put global stay_on_while_plugged_in 3
+                            
+                            # Clear app data if needed
+                            adb shell pm clear com.hp.printercontrol || echo "App not installed or already cleared"
+                            
+                            # Create necessary directories
+                            mkdir -p ${MOBILE_REPORTS_DIR}
+                            mkdir -p ${MOBILE_SCREENSHOTS_DIR}
+                        """
+                    } else {
+                        bat """
+                            ${VENV_DIR}\\Scripts\\activate
+                            
+                            # Check device connectivity
+                            adb devices
+                            
+                            # Enable USB debugging if needed
+                            adb shell settings put global development_settings_enabled 1
+                            
+                            # Set device to stay awake
+                            adb shell settings put global stay_on_while_plugged_in 3
+                            
+                            # Clear app data if needed
+                            adb shell pm clear com.hp.printercontrol || echo "App not installed or already cleared"
+                            
+                            # Create necessary directories
+                            mkdir ${MOBILE_REPORTS_DIR}
+                            mkdir ${MOBILE_SCREENSHOTS_DIR}
+                        """
+                    }
+                }
+            }
+        }
+        
+        stage('Android Physical Device Tests') {
+            when {
+                anyOf {
+                    expression { params.PLATFORM == 'android' }
+                    expression { params.PLATFORM == 'both' }
+                }
+                expression { params.DEVICE_TYPE in ['physical', 'both'] }
+            }
+            steps {
+                script {
+                    // Run Android physical device tests
+                    if (isUnix()) {
+                        sh """
+                            source ${VENV_DIR}/bin/activate
+                            
+                            # Generate session name with timestamp
+                            SESSION_NAME="Mobile_Android_Physical_\$(date +%Y%m%d_%H%M%S)"
+                            
+                            # Create session directories
+                            mkdir -p TestData/xml/\$SESSION_NAME
+                            mkdir -p ${MOBILE_SCREENSHOTS_DIR}/\$SESSION_NAME
+                            
+                            # Set environment variables for mobile tests
+                            export MOBILE_SESSION_NAME=\$SESSION_NAME
+                            export CAPTURE_SCREENSHOTS=${params.CAPTURE_SCREENSHOTS}
+                            export GENERATE_UI_TREE=${params.GENERATE_UI_TREE}
+                            export DEVICE_UDID=${params.DEVICE_UDID}
+                            export APPIUM_PORT=${params.APPIUM_PORT}
+                            
+                            # Run mobile tests
+                            python -m pytest Tests/Mobile/Android/PhysicalDevice/ \
+                                --maxfail=1 \
+                                --disable-warnings \
+                                -q \
+                                --html=${MOBILE_REPORTS_DIR}/android_physical_report.html \
+                                --self-contained-html \
+                                --junitxml=TestData/xml/\$SESSION_NAME/android_physical_report.xml \
+                                -v
+                        """
+                    } else {
+                        bat """
+                            ${VENV_DIR}\\Scripts\\activate
+                            
+                            # Generate session name with timestamp
+                            for /f "tokens=2 delims==" %%a in ('wmic OS Get localdatetime /value') do set "dt=%%a"
+                            set "YY=%dt:~2,2%" & set "YYYY=%dt:~0,4%" & set "MM=%dt:~4,2%" & set "DD=%dt:~6,2%"
+                            set "HH=%dt:~8,2%" & set "Min=%dt:~10,2%" & set "Sec=%dt:~12,2%"
+                            set "SESSION_NAME=Mobile_Android_Physical_%YYYY%%MM%%DD%_%HH%%Min%%Sec%"
+                            
+                            # Create session directories
+                            mkdir TestData\\xml\\%SESSION_NAME%
+                            mkdir ${MOBILE_SCREENSHOTS_DIR}\\%SESSION_NAME%
+                            
+                            # Set environment variables for mobile tests
+                            set MOBILE_SESSION_NAME=%SESSION_NAME%
+                            set CAPTURE_SCREENSHOTS=${params.CAPTURE_SCREENSHOTS}
+                            set GENERATE_UI_TREE=${params.GENERATE_UI_TREE}
+                            set DEVICE_UDID=${params.DEVICE_UDID}
+                            set APPIUM_PORT=${params.APPIUM_PORT}
+                            
+                            # Run mobile tests
+                            python -m pytest Tests/Mobile/Android/PhysicalDevice/ \
+                                --maxfail=1 \
+                                --disable-warnings \
+                                -q \
+                                --html=${MOBILE_REPORTS_DIR}/android_physical_report.html \
+                                --self-contained-html \
+                                --junitxml=TestData/xml/%SESSION_NAME%/android_physical_report.xml \
+                                -v
+                        """
+                    }
+                }
+            }
+            post {
+                always {
+                    archiveArtifacts artifacts: 'Reports/Mobile/*.html', allowEmptyArchive: true
+                    archiveArtifacts artifacts: 'TestData/xml/**/*.xml', allowEmptyArchive: true
+                    archiveArtifacts artifacts: 'Screenshots/Mobile/**/*.png', allowEmptyArchive: true
+                    archiveArtifacts artifacts: 'appium.log', allowEmptyArchive: true
+                }
+            }
+        }
+        
+        stage('Android Emulator Tests') {
+            when {
+                anyOf {
+                    expression { params.PLATFORM == 'android' }
+                    expression { params.PLATFORM == 'both' }
+                }
+                expression { params.DEVICE_TYPE in ['emulator', 'both'] }
+            }
+            steps {
+                script {
+                    echo "Android Emulator Tests - Placeholder for future implementation"
+                    // TODO: Implement Android emulator test execution
+                }
+            }
+        }
+        
+        stage('iOS Tests') {
+            when {
+                anyOf {
+                    expression { params.PLATFORM == 'ios' }
+                    expression { params.PLATFORM == 'both' }
+                }
+            }
+            steps {
+                script {
+                    echo "iOS Tests - Placeholder for future implementation"
+                    // TODO: Implement iOS test execution
+                }
+            }
+        }
+        
+        stage('Mobile Test Analysis') {
+            steps {
+                script {
+                    // Publish mobile-specific test results
+                    publishHTML([
+                        allowMissing: false,
+                        alwaysLinkToLastBuild: true,
+                        keepAll: true,
+                        reportDir: 'Reports/Mobile',
+                        reportFiles: '*.html',
+                        reportName: 'HP Mobile Test Report'
+                    ])
+                    
+                    // Publish JUnit results for mobile tests
+                    junit 'TestData/xml/**/*.xml'
+                }
+            }
+        }
+        
+        stage('Cleanup') {
+            steps {
+                script {
+                    // Clean up mobile-specific resources
+                    if (isUnix()) {
+                        sh """
+                            # Stop Appium server if we started it
+                            if [ "${params.START_APPIUM_SERVER}" = "true" ]; then
+                                pkill -f appium || echo "No Appium processes to kill"
+                            fi
+                            
+                            # Clean up temporary files
+                            rm -f appium.log
+                            
+                            # Reset device settings
+                            adb shell settings put global stay_on_while_plugged_in 0 || echo "Device not connected"
+                        """
+                    } else {
+                        bat """
+                            # Stop Appium server if we started it
+                            if "${params.START_APPIUM_SERVER}"=="true" (
+                                taskkill /f /im node.exe 2>nul || echo "No Appium processes to kill"
+                            )
+                            
+                            # Clean up temporary files
+                            del appium.log 2>nul || echo "No appium.log to delete"
+                            
+                            # Reset device settings
+                            adb shell settings put global stay_on_while_plugged_in 0 || echo "Device not connected"
+                        """
+                    }
+                }
+            }
+        }
+    }
+    
+    post {
+        always {
+            script {
+                echo "Mobile pipeline execution completed"
+                
+                // Clean up virtual environment
+                if (isUnix()) {
+                    sh """
+                        rm -rf ${VENV_DIR}
+                    """
+                } else {
+                    bat """
+                        rmdir /s /q ${VENV_DIR}
+                    """
+                }
+            }
+        }
+        
+        success {
+            script {
+                echo "Mobile tests passed successfully!"
+                
+                // Send success notification
+                emailext (
+                    subject: "HP Mobile Automation Tests - SUCCESS",
+                    body: """
+                        HP Mobile automation tests completed successfully.
+                        
+                        Platform: ${params.PLATFORM}
+                        Test Level: ${params.TEST_LEVEL}
+                        Device Type: ${params.DEVICE_TYPE}
+                        Device UDID: ${params.DEVICE_UDID}
+                        
+                        Build: ${env.BUILD_NUMBER}
+                        Job: ${env.JOB_NAME}
+                        
+                        View results: ${env.BUILD_URL}
+                    """,
+                    to: "${env.CHANGE_AUTHOR_EMAIL}"
+                )
+            }
+        }
+        
+        failure {
+            script {
+                echo "Mobile tests failed!"
+                
+                // Send failure notification
+                emailext (
+                    subject: "HP Mobile Automation Tests - FAILED",
+                    body: """
+                        HP Mobile automation tests failed.
+                        
+                        Platform: ${params.PLATFORM}
+                        Test Level: ${params.TEST_LEVEL}
+                        Device Type: ${params.DEVICE_TYPE}
+                        Device UDID: ${params.DEVICE_UDID}
+                        
+                        Build: ${env.BUILD_NUMBER}
+                        Job: ${env.JOB_NAME}
+                        
+                        View results: ${env.BUILD_URL}
+                        Console output: ${env.BUILD_URL}console
+                    """,
+                    to: "${env.CHANGE_AUTHOR_EMAIL}"
+                )
+            }
+        }
+        
+        unstable {
+            script {
+                echo "Mobile tests were unstable!"
+            }
+        }
+    }
+}

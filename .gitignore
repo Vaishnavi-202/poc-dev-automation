@@ -1,0 +1,48 @@
+# Virtual environments
+.venv/
+venv/
+env/
+bin/
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+
+# Environment files
+.env
+.env.*
+
+# Pytest / coverage
+.pytest_cache/
+.cache/
+.coverage
+htmlcov/
+coverage.xml
+
+# Build artifacts
+dist/
+build/
+*.egg-info/
+
+# IDEs and editors
+.vscode/
+.idea/
+
+# Logs / reports
+*.log
+report.html
+
+# Allure / reports output
+reports/
+allure-results/
+allure-report/
+
+# Screenshots
+screenshots/
+*.png
+*.jpg
+*.jpeg
+
+# TestData artifacts (generated)
+TestData/hp_ui_tree.txt
+testdata/hp_ui_tree.txt
