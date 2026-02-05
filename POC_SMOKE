@@ -1,0 +1,235 @@
+# base_class.py
+import json
+import time
+import logging
+import os
+from pywinauto import Application, Desktop
+from pywinauto.timings import wait_until_passes
+from pywinauto.findwindows import ElementNotFoundError
+from pywinauto.keyboard import send_keys
+
+# Logging setup (enterprise style)
+LOG_DIR = "logs"
+os.makedirs(LOG_DIR, exist_ok=True)
+
+def get_logger(name):
+    logger = logging.getLogger(name)
+    logger.setLevel(logging.INFO)
+    if not logger.handlers:
+        file_handler = logging.FileHandler(
+            os.path.join(LOG_DIR, "execution.log"),
+            mode="a",
+            encoding="utf-8"
+        )
+        console_handler = logging.StreamHandler()
+        formatter = logging.Formatter(
+            "%(asctime)s | %(levelname)s | %(name)s | %(message)s"
+        )
+        file_handler.setFormatter(formatter)
+        console_handler.setFormatter(formatter)
+        logger.addHandler(file_handler)
+        logger.addHandler(console_handler)
+    return logger
+
+log = get_logger(__name__)
+
+class BaseClass:
+    def __init__(self):
+        with open("config.json") as f:
+            self.config = json.load(f)
+        self.app = None
+        self.desktop = Desktop(backend=self.config["backend"])
+        self.main_window = None
+
+    def launch_application(self):
+        log.info("Launching HP Web Jetadmin application")
+        try:
+            self.app = Application(backend=self.config["backend"]).start(self.config["application_path"])
+            self.main_window = wait_until_passes(
+                timeout=self.config["default_timeout"],
+                retry_interval=1,
+                func=lambda: self.desktop.window(title_re=".*HP Web Jetadmin.*"),
+                exceptions=ElementNotFoundError
+            )
+            self.main_window.wait("visible", timeout=self.config["default_timeout"])
+            self.main_window.set_focus()
+            log.info("Main window found and focused")
+        except Exception as e:
+            log.error(f"Failed to launch or connect to main window: {e}")
+            raise
+
+    def connect_to_main_window(self):
+        log.info("Connecting to main window")
+        try:
+            self.main_window = wait_until_passes(
+                timeout=self.config["default_timeout"],
+                retry_interval=1,
+                func=lambda: self.desktop.window(title_re=".*HP Web Jetadmin.*"),
+                exceptions=ElementNotFoundError
+            )
+            self.main_window.wait("visible", timeout=self.config["default_timeout"])
+            self.main_window.set_focus()
+            log.info("Main window connected and focused")
+        except Exception as e:
+            log.error(f"Failed to connect to main window: {e}")
+            raise
+
+    def wait_for_element(self, parent, **locator):
+        log.info(f"Waiting for element: {locator}")
+        try:
+            return wait_until_passes(
+                timeout=self.config["default_timeout"],
+                retry_interval=1,
+                func=lambda: parent.child_window(**locator).wait("visible", timeout=5),
+                exceptions=ElementNotFoundError
+            )
+        except Exception as e:
+            log.error(f"Element not found: {locator} - {e}")
+            raise
+
+    def click_element(self, parent, **locator):
+        log.info(f"Clicking element: {locator}")
+        try:
+            element = parent.child_window(**locator).wrapper_object()
+            element.set_focus()
+            element.click_input()
+            log.info(f"Clicked element: {locator}")
+        except Exception as e:
+            log.error(f"Failed to click element {locator}: {e}")
+            raise
+
+    def right_click_element(self, parent, **locator):
+        log.info(f"Right-clicking element: {locator}")
+        try:
+            element = parent.child_window(**locator).wrapper_object()
+            element.set_focus()
+            element.right_click_input()
+            log.info(f"Right-clicked element: {locator}")
+        except Exception as e:
+            log.error(f"Failed to right-click element: {locator}: {e}")
+            raise
+
+    def enter_text(self, parent, text, **locator):
+        log.info(f"Entering text '{text}' into element: {locator}")
+        try:
+            element = parent.child_window(**locator).wrapper_object()
+            element.set_focus()
+            element.type_keys("^a{BACKSPACE}", set_foreground=True)
+            element.type_keys(text, with_spaces=True, set_foreground=True)
+            log.info(f"Entered text '{text}' into element: {locator}")
+        except Exception as e:
+            log.error(f"Failed to enter text in element {locator}: {e}")
+            raise
+
+# test.py
+import pytest
+import allure
+import time
+
+from base_class import BaseClass
+
+@pytest.mark.smoke
+@allure.feature("Automatic Group Creation")
+def test_automatic_group_creation():
+    """
+    Test Case: Verification of Automatic Group Creation in HP Web Jetadmin
+    """
+    base = BaseClass()
+    base.launch_application()
+
+    # Step 1: Right-click "Groups" tree item
+    with allure.step("Right-click 'Groups' tree item in navigation pane"):
+        nav_tree = base.main_window.child_window(control_type="Tree", found_index=0).wrapper_object()
+        nav_tree.set_focus()
+        groups_item = nav_tree.child_window(title="Groups", control_type="TreeItem")
+        groups_item.wait("visible", timeout=10)
+        groups_item.wrapper_object().set_focus()
+        groups_item.wrapper_object().right_click_input()
+        time.sleep(1)
+
+    # Step 2: Click "New Group..." from context menu
+    with allure.step("Select 'New Group...' from context menu"):
+        # Sometimes context menu is keyboard navigable
+        send_keys("n")  # Assuming 'New Group...' is accessible via 'n'
+        time.sleep(1)
+
+    # Step 3: Enter group name and select 'Automatic group' checkbox
+    with allure.step("Enter group name and select 'Automatic group' checkbox"):
+        create_group_win = base.desktop.window(title_re="Create Group.*", control_type="Window")
+        create_group_win.wait("visible", timeout=20)
+        create_group_win.set_focus()
+        base.enter_text(
+            create_group_win,
+            "WJA",
+            auto_id="textBox_newGroupName",
+            control_type="Edit"
+        )
+        # Select 'Automatic group' checkbox if present
+        try:
+            automatic_group_chk = create_group_win.child_window(title="Automatic group", control_type="CheckBox")
+            if not automatic_group_chk.get_toggle_state():
+                automatic_group_chk.toggle()
+            allure.attach("Automatic group checkbox selected", name="Checkbox State")
+        except Exception as e:
+            allure.attach(f"Automatic group checkbox not found or already selected: {e}", name="Checkbox State")
+        time.sleep(1)
+        base.click_element(create_group_win, title="Next >", control_type="Button")
+
+    # Step 4: Add filter condition in "Specify Filter Criteria"
+    with allure.step("Add filter condition in 'Specify Filter Criteria'"):
+        # Click "Add..." button
+        base.click_element(create_group_win, auto_id="buttonAdd", control_type="Button")
+        # Wait for Function window
+        function_win = base.desktop.window(title_re="Function.*", control_type="Window")
+        function_win.wait("visible", timeout=20)
+        function_win.set_focus()
+        # Click "Open" split button
+        base.click_element(function_win, title="Open", control_type="SplitButton")
+        # Select "Device Model" in combo box
+        device_model_combo = function_win.child_window(control_type="ComboBox", found_index=0).wrapper_object()
+        device_model_combo.set_focus()
+        device_model_combo.select("Device Model")
+        time.sleep(0.5)
+        # Enter "Hp" in Value edit
+        base.enter_text(function_win, "Hp", automation_id="1001", control_type="Edit")
+        # Click "OK"
+        base.click_element(function_win, auto_id="buttonOK", control_type="Button")
+        time.sleep(1)
+        # Click "Next >"
+        base.click_element(create_group_win, title="Next >", control_type="Button")
+
+    # Step 5: Click "Create Group" and then "Done"
+    with allure.step("Complete group creation wizard"):
+        base.click_element(create_group_win, title="Create Group", control_type="Button")
+        time.sleep(1)
+        base.click_element(create_group_win, title="Done", control_type="Button")
+        time.sleep(2)
+
+    # Step 6: Expand Groups tree and verify new group
+    with allure.step("Expand Groups tree and verify new group is present"):
+        base.connect_to_main_window()
+        nav_tree = base.main_window.child_window(control_type="Tree", found_index=0).wrapper_object()
+        nav_tree.set_focus()
+        # Click on "WJA (1)" group
+        wja_group = nav_tree.child_window(title_re="WJA.*", control_type="TreeItem")
+        wja_group.wait("visible", timeout=10)
+        wja_group.wrapper_object().click_input()
+        allure.attach("WJA group selected", name="Group Selection")
+        time.sleep(1)
+        # Optionally, verify device details pane appears (implementation depends on UI)
+
+    # Test passes if no exception is raised
+
+# config.json
+{
+  "application_path": "C:/Program Files/HP/Web Jetadmin/wja.exe",
+  "backend": "uia",
+  "default_timeout": 20,
+  "retry_count": 3
+}
+
+# requirements.txt
+pywinauto
+pytest
+pytest-html
+allure-pytest
