@@ -5,13 +5,13 @@ on:
     branches:
       - POC_SMOKE
 
-jobs:
-  build:
-    runs-on: ubuntu-latest
+permissions:
+  contents: read
+  packages: write
 
-    permissions:
-      contents: read
-      packages: write
+jobs:
+  docker-build-push:
+    runs-on: ubuntu-latest
 
     steps:
       - name: Checkout code
@@ -26,10 +26,6 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Set lowercase repo name
-        run: |
-            echo "REPO_LC=${GITHUB_REPOSITORY,,}" >> $GITHUB_ENV
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
