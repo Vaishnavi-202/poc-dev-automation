@@ -1,0 +1,21 @@
+trigger:
+- POC_SMOKE
+
+pool:
+  vmImage: windows-latest
+
+steps:
+- task: UsePythonVersion@0
+  inputs:
+    versionSpec: '3.9'
+  displayName: 'Use Python 3.9'
+
+- script: |
+    python -m pip install --upgrade pip
+    pip install -r requirements.txt
+  displayName: 'Install dependencies'
+
+- script: |
+    echo "Running demo test"
+    pytest -k demo --maxfail=1
+  displayName: 'Run demo pywinauto test'
