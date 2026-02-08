@@ -1,24 +1,24 @@
 trigger:
-- POC_SMOKE
+  branches:
+    include:
+      - POC_SMOKE
 
 pool:
-  vmImage: ubuntu-latest
+  vmImage: 'ubuntu-latest'
 
-steps:
-- checkout: self
-  displayName: "Checkout source code"
+stages:
+- stage: Build
+  displayName: Build Docker Image
+  jobs:
+  - job: Build
+    steps:
+    - checkout: self
 
-- task: UsePythonVersion@0
-  inputs:
-    versionSpec: '3.9'
-  displayName: "Use Python 3.9"
-
-- script: |
-    python -m pip install --upgrade pip
-    pip install -r requirements.txt
-  displayName: "Install dependencies (demo)"
-
-- script: |
-    echo "Skipping pywinauto execution (Linux agent)"
-    pytest --collect-only
-  displayName: "Demo: validate test discovery"
+    - task: Docker@2
+      displayName: Build Docker Image
+      inputs:
+        command: build
+        dockerfile: Dockerfile
+        repository: poc-dev-automation
+        tags: |
+          latest
