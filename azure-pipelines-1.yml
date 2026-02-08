@@ -1,0 +1,52 @@
+# Starter pipeline
+# Start with a minimal pipeline that you can customize to build and deploy your code.
+# Add steps that build, run tests, deploy, and more:
+# https://aka.ms/yaml
+
+trigger:
+- POC_SMOKE
+
+stages:
+# -------------------- STAGE 1 --------------------
+- stage: Windows_Tests
+  displayName: "Run Tests on Windows"
+  jobs:
+  - job: Run_Tests
+    displayName: "Execute Test Cases"
+    pool:
+      name: windows-agent-pool   # your self-hosted Windows agent
+    steps:
+    - checkout: self
+
+    - script: |
+        echo "Running test cases..."
+        echo "Tests will be added later"
+      displayName: "Run Tests"
+
+    - script: |
+        echo "Preparing Allure results"
+        mkdir allure-results
+        echo dummy > allure-results/result.txt
+      displayName: "Generate Allure Results"
+
+    - publish: allure-results
+      artifact: allure-results
+      displayName: "Publish Allure Artifact"
+
+# -------------------- STAGE 2 --------------------
+- stage: Docker_Build
+  displayName: "Build Docker Image"
+  dependsOn: Windows_Tests
+  condition: succeeded()   # key line
+  jobs:
+  - job: Build_Image
+    displayName: "Docker Build on Linux"
+    pool:
+      name: linux-agent-pool
+    steps:
+    - checkout: self
+
+    - script: |
+        docker version
+        docker build -t poc-dev-automation:latest .
+      displayName: "Build Docker Image"
