@@ -4,49 +4,41 @@
 # https://aka.ms/yaml
 
 trigger:
+- main
 - POC_SMOKE
 
-stages:
-# -------------------- STAGE 1 --------------------
-- stage: Windows_Tests
-  displayName: "Run Tests on Windows"
-  jobs:
-  - job: Run_Tests
-    displayName: "Execute Test Cases"
-    pool:
-      name: local-docker-agent   # your self-hosted Windows agent
-    steps:
-    - checkout: self
+pool:
+  name: local-docker-agent   # Windows self-hosted agent
 
-    - script: |
-        echo "Running test cases..."
-        echo "Tests will be added later"
-      displayName: "Run Tests"
+steps:
+- checkout: self
 
-    - script: |
-        echo "Preparing Allure results"
-        mkdir allure-results
-        echo dummy > allure-results/result.txt
-      displayName: "Generate Allure Results"
+- task: UsePythonVersion@0
+  inputs:
+    versionSpec: '3.9'
+  displayName: 'Use Python 3.9'
 
-    - publish: allure-results
-      artifact: allure-results
-      displayName: "Publish Allure Artifact"
+- script: |
+    python -m pip install --upgrade pip
+    pip install -r requirements.txt
+  displayName: 'Install dependencies'
 
-# -------------------- STAGE 2 --------------------
-- stage: Docker_Build
-  displayName: "Build Docker Image"
-  dependsOn: Windows_Tests
-  condition: succeeded()   # key line
-  jobs:
-  - job: Build_Image
-    displayName: "Docker Build on Linux"
-    pool:
-      name: local-docker-agent
-    steps:
-    - checkout: self
+- script: |
+    pytest tests/WJA/POC --alluredir=allure-results
+  displayName: 'Run POC test cases'
 
-    - script: |
-        docker version
-        docker build -t poc-dev-automation:latest .
-      displayName: "Build Docker Image"
+- task: PublishPipelineArtifact@1
+  inputs:
+    targetPath: 'allure-results'
+    artifact: 'allure-results'
+  displayName: 'Publish Allure Results'
+
+- script: |
+    allure generate allure-results -o allure-report --clean
+  displayName: 'Generate Allure Report'
+
+- task: PublishPipelineArtifact@1
+  inputs:
+    targetPath: 'allure-report'
+    artifact: 'allure-report'
+  displayName: 'Publish Allure Report'
