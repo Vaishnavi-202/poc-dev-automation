@@ -14,7 +14,7 @@ stages:
   - job: Run_Tests
     displayName: "Execute Test Cases"
     pool:
-      name: windows-agent-pool   # your self-hosted Windows agent
+      name: local-docker-agent   # your self-hosted Windows agent
     steps:
     - checkout: self
 
@@ -42,7 +42,7 @@ stages:
   - job: Build_Image
     displayName: "Docker Build on Linux"
     pool:
-      name: linux-agent-pool
+      name: local-docker-agent
     steps:
     - checkout: self
 
