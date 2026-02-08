@@ -1,24 +1,21 @@
 trigger:
-  branches:
-    include:
-      - POC_SMOKE
+- POC_SMOKE
 
 pool:
-  vmImage: 'ubuntu-latest'
+  name: local-docker-agent
 
-stages:
-- stage: Build
-  displayName: Build Docker Image
-  jobs:
-  - job: Build
-    steps:
-    - checkout: self
+steps:
+- checkout: self
 
-    - task: Docker@2
-      displayName: Build Docker Image
-      inputs:
-        command: build
-        dockerfile: Dockerfile
-        repository: poc-dev-automation
-        tags: |
-          latest
+- script: |
+    echo "Docker version:"
+    docker --version
+  displayName: 'Verify Docker'
+
+- script: |
+    docker build -t poc-dev-automation:local .
+  displayName: 'Build Docker Image'
+
+- script: |
+    docker run --rm poc-dev-automation:local
+  displayName: 'Run Docker Container'
