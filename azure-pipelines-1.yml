@@ -47,14 +47,7 @@ steps:
   displayName: 'Serve Allure Report (auto-open & auto-close)'
   condition: succeededOrFailed()
 
-# 5️ Generate static Allure HTML (CI safe)
-
-- script: |
-    allure generate allure-results --clean -o allure-report
-  displayName: 'Generate Allure HTML Report'
-  condition: succeededOrFailed()
-
-# 6️ Publish Allure HTML as Azure Artifact
+# 5 Publish Allure HTML as Azure Artifact
 
 - task: PublishPipelineArtifact@1
   inputs:
