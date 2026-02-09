@@ -1,6 +1,4 @@
-# ============================================
 # Azure Pipeline – UI Automation (Allure + UI)
-# ============================================
 
 trigger:
   branches:
@@ -15,23 +13,20 @@ pool:
 
 steps:
 
-# ------------------------------------------------
-# 1️⃣ Checkout source code
-# ------------------------------------------------
+# 1️ Checkout source code
+
 - checkout: self
 
-# ------------------------------------------------
-# 2️⃣ Install Python dependencies
-# ------------------------------------------------
+# 2️ Install Python dependencies
+
 - script: |
     python -m pip install --upgrade pip
     pip install -r requirements.txt
     pip install pytest allure-pytest
   displayName: 'Install test dependencies'
 
-# ------------------------------------------------
-# 3️⃣ Run UI automation tests (interactive session)
-# ------------------------------------------------
+# 3️ Run UI automation tests (interactive session)
+
 - script: |
     echo Running UI tests in interactive desktop session
     pytest .\tests\wja\poc ^
@@ -41,9 +36,8 @@ steps:
   displayName: 'Run POC UI test cases'
   condition: succeededOrFailed()
 
-# ------------------------------------------------
-# 4️⃣ Auto-open + auto-close Allure Report (LOCAL)
-# ------------------------------------------------
+# 4️ Auto-open + auto-close Allure Report (LOCAL)
+
 - script: |
     echo Starting Allure server (auto-close in 30 seconds)
     start "" cmd /c "allure serve allure-results"
@@ -53,17 +47,15 @@ steps:
   displayName: 'Serve Allure Report (auto-open & auto-close)'
   condition: succeededOrFailed()
 
-# ------------------------------------------------
-# 5️⃣ Generate static Allure HTML (CI safe)
-# ------------------------------------------------
+# 5️ Generate static Allure HTML (CI safe)
+
 - script: |
-    allure generate allure-results -o allure-report --clean
+    allure generate allure-results --clean -o allure-report
   displayName: 'Generate Allure HTML Report'
   condition: succeededOrFailed()
 
-# ------------------------------------------------
-# 6️⃣ Publish Allure HTML as Azure Artifact
-# ------------------------------------------------
+# 6️ Publish Allure HTML as Azure Artifact
+
 - task: PublishPipelineArtifact@1
   inputs:
     targetPath: 'allure-report'
