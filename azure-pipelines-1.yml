@@ -15,10 +15,12 @@ steps:
 - checkout: self
 
 # 2️ Verify Python (interactive session check)
+
 - script: |
-    echo Running test in interactive desktop
-    cmd /c "start /wait pytest ./tests/wja/poc --alluredir=allure-results -p no:xdist"
-  displayName: 'Run POC UI test cases (foreground)'
+    echo Checking Python installation
+    python --version
+    pip --version
+  displayName: 'Verify Python'
   
 # 3️ Install dependencies
 - script: |
@@ -27,13 +29,11 @@ steps:
     pip install pytest allure-pytest
   displayName: 'Install test dependencies'
 
-# 4️ Run ONE POC test (interactive UI)
+# 4️ Run POC tests (interactive UI)
 - script: |
-    pytest ./tests/wja/poc ^
-      --alluredir=allure-results ^
-      -p no:xdist ^
-      -p no:rerunfailures
-  displayName: 'Run POC UI test cases'
+    echo Running test in interactive desktop
+    cmd /c "start /wait pytest ./tests/wja/poc --alluredir=allure-results -p no:xdist -p no:rerunfailures"
+  displayName: 'Run POC UI test cases (foreground)'
 
 # 5️ Publish Allure raw results
 - task: PublishPipelineArtifact@1
