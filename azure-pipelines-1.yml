@@ -1,5 +1,4 @@
-# Azure Pipeline – UI Automation (Allure + UI)
-
+# Starter pipeline
 trigger:
   branches:
     include:
@@ -7,51 +6,38 @@ trigger:
       - POC_SMOKE
 
 pool:
-  name: local-docker-agent      # Self-hosted agent pool
+  name: local-docker-agent   # Self-hosted Windows agent
   demands:
-    - Agent.Name -equals local-docker-02
+    - Agent.Name -equals local-docker-01
 
 steps:
-
-# 1️ Checkout source code
-
+# 1️⃣ Checkout code
 - checkout: self
 
-# 2️ Install Python dependencies
-
+# 2️⃣ Verify Python (interactive session check)
+- script: |
+    echo Running test in interactive desktop
+    cmd /c "start /wait pytest tests/wja/poc/test_wja1_help_about.py --alluredir=allure-results -p no:xdist"
+  displayName: 'Run POC UI test cases (foreground)'
+  
+# 3️⃣ Install dependencies
 - script: |
     python -m pip install --upgrade pip
     pip install -r requirements.txt
     pip install pytest allure-pytest
   displayName: 'Install test dependencies'
 
-# 3️ Run UI automation tests (interactive session)
-
+# 4️⃣ Run ONE POC test (interactive UI)
 - script: |
-    echo Running UI tests in interactive desktop session
-    pytest .\tests\wja\poc ^
+    pytest tests/wja/poc/test_wja1_help_about.py ^
       --alluredir=allure-results ^
       -p no:xdist ^
       -p no:rerunfailures
   displayName: 'Run POC UI test cases'
-  condition: succeededOrFailed()
-
-# 4️ Auto-open + auto-close Allure Report (LOCAL)
-
-- script: |
-    echo Starting Allure server (auto-close in 30 seconds)
-    start "" cmd /c "allure serve allure-results"
-    timeout /t 30 /nobreak
-    echo Stopping Allure server
-    taskkill /IM java.exe /F
-  displayName: 'Serve Allure Report (auto-open & auto-close)'
-  condition: succeededOrFailed()
-
-# 5 Publish Allure HTML as Azure Artifact
-
+  
+# 5️⃣ Publish Allure raw results
 - task: PublishPipelineArtifact@1
   inputs:
-    targetPath: 'allure-report'
-    artifact: 'Allure-HTML-Report'
-  displayName: 'Publish Allure HTML Report'
-  condition: succeededOrFailed()
+    targetPath: 'allure-results'
+    artifact: 'allure-results'
+  displayName: 'Publish Allure Results'
