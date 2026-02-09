@@ -9,7 +9,7 @@ trigger:
 pool:
   name: local-docker-agent      # Self-hosted agent pool
   demands:
-    - Agent.Name -equals local-docker-01
+    - Agent.Name -equals local-docker-02
 
 steps:
 
