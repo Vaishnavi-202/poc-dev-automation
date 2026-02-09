@@ -30,7 +30,10 @@ steps:
 
 # 4️⃣ Run ONE POC test (interactive UI)
 - script: |
-    pytest tests/wja/poc/test_wja1_help_about.py --alluredir=allure-results
+    pytest tests/wja/poc/test_wja1_help_about.py ^
+      --alluredir=allure-results ^
+      -p no:xdist ^
+      -p no:rerunfailures
   displayName: 'Run POC UI test cases'
 
 # 5️⃣ Publish Allure raw results
