@@ -17,7 +17,7 @@ steps:
 # 2️⃣ Verify Python (interactive session check)
 - script: |
     echo Running test in interactive desktop
-    cmd /c "start /wait pytest tests/wja/poc/test_wja1_help_about.py --alluredir=allure-results -p no:xdist"
+    cmd /c "start /wait pytest .\tests\wja\poc --alluredir=allure-results -p no:xdist"
   displayName: 'Run POC UI test cases (foreground)'
   
 # 3️⃣ Install dependencies
@@ -29,7 +29,7 @@ steps:
 
 # 4️⃣ Run ONE POC test (interactive UI)
 - script: |
-    pytest tests/wja/poc/test_wja1_help_about.py ^
+    pytest .\tests\wja\poc ^
       --alluredir=allure-results ^
       -p no:xdist ^
       -p no:rerunfailures
