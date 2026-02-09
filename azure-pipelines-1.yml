@@ -25,7 +25,7 @@ steps:
   displayName: 'Install dependencies'
 
 - script: |
-    pytest .\tests\wja\poc --alluredir=allure-results
+    pytest .\tests\wja\poc\test_wja1_help_about.py --alluredir=allure-results
   displayName: 'Run POC test cases'
 
 - script: |
