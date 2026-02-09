@@ -8,7 +8,7 @@ trigger:
 pool:
   name: local-docker-agent   # Self-hosted Windows agent
   demands:
-    - Agent.Name -equals local-docker-01
+    - Agent.Name -equals local-docker-02
 
 steps:
 # 1️ Checkout code
