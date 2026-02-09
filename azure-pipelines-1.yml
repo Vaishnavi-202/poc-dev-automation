@@ -1,39 +1,41 @@
 # Starter pipeline
-# Start with a minimal pipeline that you can customize to build and deploy your code.
-# Add steps that build, run tests, deploy, and more:
-# https://aka.ms/yaml
-
 trigger:
-- main
-- POC_SMOKE
+  branches:
+    include:
+      - main
+      - POC_SMOKE
 
 pool:
-  name: local-docker-agent   # Windows self-hosted agent
+  name: local-docker-agent   # Self-hosted Windows agent
+  demands:
+    - Agent.Name -equals local-docker-01
 
 steps:
+# 1️⃣ Checkout code
 - checkout: self
 
+# 2️⃣ Verify Python (interactive session check)
 - script: |
+    echo Checking Python installation
     python --version
     pip --version
   displayName: 'Verify Python'
 
+# 3️⃣ Install dependencies
 - script: |
     python -m pip install --upgrade pip
     pip install -r requirements.txt
     pip install pytest allure-pytest
-  displayName: 'Install dependencies'
+  displayName: 'Install test dependencies'
 
+# 4️⃣ Run ONE POC test (interactive UI)
 - script: |
-    pytest .\tests\wja\poc\test_wja1_help_about.py --alluredir=allure-results
-  displayName: 'Run POC test cases'
+    pytest tests/wja/poc/test_wja1_help_about.py --alluredir=allure-results
+  displayName: 'Run POC UI test cases'
 
-- script: |
-    allure generate allure-results -o allure-report --clean
-  displayName: 'Generate Allure Report'
-
+# 5️⃣ Publish Allure raw results
 - task: PublishPipelineArtifact@1
   inputs:
-    targetPath: 'allure-report'
-    artifact: 'allure-report'
-  displayName: 'Publish Allure Report'
+    targetPath: 'allure-results'
+    artifact: 'allure-results'
+  displayName: 'Publish Allure Results'
