@@ -16,11 +16,10 @@ steps:
 
 # 2️⃣ Verify Python (interactive session check)
 - script: |
-    echo Checking Python installation
-    python --version
-    pip --version
-  displayName: 'Verify Python'
-
+    echo Running test in interactive desktop
+    cmd /c "start /wait pytest tests/wja/poc/test_wja1_help_about.py --alluredir=allure-results -p no:xdist"
+  displayName: 'Run POC UI test cases (foreground)'
+  
 # 3️⃣ Install dependencies
 - script: |
     python -m pip install --upgrade pip
