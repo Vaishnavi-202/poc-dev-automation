@@ -15,8 +15,8 @@ steps:
 
 - task: UsePythonVersion@0
   inputs:
-    versionSpec: '3.9'
-  displayName: 'Use Python 3.9'
+    versionSpec: '3.11'
+    githubToken: $(GITHUB_TOKEN)
 
 - script: |
     python -m pip install --upgrade pip
@@ -27,11 +27,6 @@ steps:
     pip install pytest allure-pytest
     pytest .\tests\wja\poc --alluredir=allure-results
   displayName: 'Run POC test cases'
-
-- task: UsePythonVersion@0
-  inputs:
-    versionSpec: '3.11'
-    githubToken: $(GITHUB_TOKEN)
 
 - task: PublishPipelineArtifact@1
   inputs:
