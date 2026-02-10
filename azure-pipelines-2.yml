@@ -1,0 +1,74 @@
+trigger:
+  branches:
+    include:
+      - main
+      - POC_SMOKE
+
+pool:
+  name: local-docker-agent
+  demands:
+    - Agent.Name -equals local-docker-02
+
+steps:
+- checkout: self
+
+- script: |
+    echo Checking Python installation
+    python --version
+    pip --version
+  displayName: "Verify Python"
+
+- script: |
+    python -m pip install --upgrade pip
+    pip install -r requirements.txt
+    pip install pytest allure-pytest
+  displayName: "Install test dependencies"
+
+- script: |
+    echo Running test in interactive desktop
+    cmd /c "start /wait pytest ./tests/wja/poc --alluredir=allure-results -p no:xdist -p no:rerunfailures"
+  displayName: "Run POC UI test cases (foreground)"
+
+- pwsh: |
+    $smtpServer = "smtp.gmail.com"
+    $smtpPort = 587
+    $smtpUser = "vaishnavi.manishankar@gmail.com"
+    $smtpPass = "$(SMTP_PASSWORD)"
+
+    $from = "vaishnavi.manishankar@gmail.com"
+    $to = "qa1@gmail.com,qa2@gmail.com"
+
+    $allureLink = "$env:SYSTEM_TEAMFOUNDATIONCOLLECTIONURI$env:SYSTEM_TEAMPROJECT/_build/results?buildId=$env:BUILD_BUILDID&view=artifacts"
+
+    $lines = @(
+      "Hello Team,",
+      "",
+      "POC UI Test execution is completed.",
+      "",
+      "Status   : $env:BUILD_STATUS",
+      "Pipeline : $env:BUILD_DEFINITIONNAME",
+      "Build #  : $env:BUILD_BUILDNUMBER",
+      "",
+      "Allure Results:",
+      $allureLink,
+      "",
+      "Regards,",
+      "Azure DevOps CI"
+    )
+
+    $body = $lines -join "`r`n"
+
+    $securePass = ConvertTo-SecureString $smtpPass -AsPlainText -Force
+    $cred = New-Object System.Management.Automation.PSCredential ($smtpUser, $securePass)
+
+    Send-MailMessage `
+      -From $from `
+      -To $to `
+      -Subject "POC UI Tests - $env:BUILD_STATUS | Build $env:BUILD_BUILDNUMBER" `
+      -Body $body `
+      -SmtpServer $smtpServer `
+      -Port $smtpPort `
+      -UseSsl `
+      -Credential $cred
+  displayName: "Send Email Notification"
+  condition: always()
