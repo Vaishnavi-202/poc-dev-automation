@@ -1,9 +1,14 @@
 # Starter pipeline
+#trigger:
+#  branches:
+#    include:
+#      - main
+#      - POC_SMOKE
+
 trigger:
   branches:
     include:
-      - main
-      - POC_SMOKE
+      - none
 
 pool:
   name: local-docker-agent   # Self-hosted Windows agent
