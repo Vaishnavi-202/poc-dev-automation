@@ -1,5 +1,8 @@
+#trigger:
+#- POC_SMOKE
+
 trigger:
-- POC_SMOKE
+- none
 
 pool:
   name: local-docker-agent
