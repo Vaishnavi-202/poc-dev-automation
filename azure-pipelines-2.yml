@@ -30,16 +30,16 @@ steps:
   displayName: "Run POC UI test cases (foreground)"
 
 - powershell: |
+
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
     $smtpServer = "smtp.gmail.com"
     $smtpPort = 587
     $smtpUser = "vaishnavi.manishankar@gmail.com"
     $smtpPass = "$(SMTP_PASSWORD)"
 
     $from = "vaishnavi.manishankar@gmail.com"
-    $to = @(
-      "qa1@gmail.com",
-      "qa2@gmail.com"
-    )
+    $to = @("qa1@gmail.com","qa2@gmail.com")
 
     $allureLink = "$env:SYSTEM_TEAMFOUNDATIONCOLLECTIONURI$env:SYSTEM_TEAMPROJECT/_build/results?buildId=$env:BUILD_BUILDID&view=artifacts"
 
