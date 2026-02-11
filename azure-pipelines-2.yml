@@ -30,25 +30,32 @@ steps:
   displayName: "Run POC UI test cases (foreground)"
 
 - powershell: |
-
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
     $smtpServer = "smtp.gmail.com"
-    $smtpPort = 587
-    $smtpUser = "vaishubharathi2017@gmail.com"
+    $smtpPort   = 587
+
+    $smtpUser = "$(SMTP_USER)"
     $smtpPass = "$(SMTP_PASSWORD)"
 
-    $from = "vaishubharathi2017@gmail.com"
-    $to = @("qa1@gmail.com","qa2@gmail.com")
+    if ([string]::IsNullOrWhiteSpace($smtpUser)) { throw "SMTP_USER is empty." }
+    if ([string]::IsNullOrWhiteSpace($smtpPass)) { throw "SMTP_PASSWORD is empty. Set it as a secret variable (Gmail App Password)." }
+
+    $from = $smtpUser
+    $to   = @("qa1@gmail.com","qa2@gmail.com")
 
     $allureLink = "$env:SYSTEM_TEAMFOUNDATIONCOLLECTIONURI$env:SYSTEM_TEAMPROJECT/_build/results?buildId=$env:BUILD_BUILDID&view=artifacts"
+
+    # Azure DevOps job result is usually available as AGENT_JOBSTATUS
+    $status = $env:AGENT_JOBSTATUS
+    if ([string]::IsNullOrWhiteSpace($status)) { $status = "Unknown" }
 
     $lines = @(
       "Hello Team,",
       "",
       "POC UI Test execution is completed.",
       "",
-      "Status   : $env:BUILD_STATUS",
+      "Status   : $status",
       "Pipeline : $env:BUILD_DEFINITIONNAME",
       "Build #  : $env:BUILD_BUILDNUMBER",
       "",
@@ -58,7 +65,6 @@ steps:
       "Regards,",
       "Azure DevOps CI"
     )
-
     $body = $lines -join "`r`n"
 
     $securePass = ConvertTo-SecureString $smtpPass -AsPlainText -Force
@@ -67,7 +73,7 @@ steps:
     Send-MailMessage `
       -From $from `
       -To $to `
-      -Subject "POC UI Tests - $env:BUILD_STATUS | Build $env:BUILD_BUILDNUMBER" `
+      -Subject "POC UI Tests - $status | Build $env:BUILD_BUILDNUMBER" `
       -Body $body `
       -SmtpServer $smtpServer `
       -Port $smtpPort `
