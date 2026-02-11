@@ -95,7 +95,7 @@ steps:
       "Pipeline : $env:BUILD_DEFINITIONNAME",
       "Build #  : $env:BUILD_BUILDNUMBER",
       "",
-      "Test Summary (Pytest):",
+      "Test Summary:",
       "Total   : $tests",
       "Passed  : $passed",
       "Failed  : $failures",
