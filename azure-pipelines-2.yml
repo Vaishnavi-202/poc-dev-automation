@@ -26,7 +26,7 @@ steps:
 
 - script: |
     echo Running test in interactive desktop
-    cmd /c "start /wait pytest ./tests/wja/poc --alluredir=allure-results -p no:xdist -p no:rerunfailures"
+    cmd /c "start /wait pytest ./tests/wja/poc --alluredir=allure-results --junitxml=pytest-junit.xml -p no:xdist -p no:rerunfailures"
   displayName: "Run POC UI test cases (foreground)"
 
 - powershell: |
@@ -34,21 +34,57 @@ steps:
 
     $smtpServer = "smtp.gmail.com"
     $smtpPort   = 587
-
-    $smtpUser = "$(SMTP_USER)"
-    $smtpPass = "$(SMTP_PASSWORD)"
-
-    if ([string]::IsNullOrWhiteSpace($smtpUser)) { throw "SMTP_USER is empty." }
-    if ([string]::IsNullOrWhiteSpace($smtpPass)) { throw "SMTP_PASSWORD is empty. Set it as a secret variable (Gmail App Password)." }
+    $smtpUser   = "$(SMTP_USER)"
+    $smtpPass   = "$(SMTP_PASSWORD)"
 
     $from = $smtpUser
     $to   = @("qa1@gmail.com","qa2@gmail.com")
 
-    $allureLink = "$env:SYSTEM_TEAMFOUNDATIONCOLLECTIONURI$env:SYSTEM_TEAMPROJECT/_build/results?buildId=$env:BUILD_BUILDID&view=artifacts"
-
-    # Azure DevOps job result is usually available as AGENT_JOBSTATUS
     $status = $env:AGENT_JOBSTATUS
     if ([string]::IsNullOrWhiteSpace($status)) { $status = "Unknown" }
+
+    # -------- JUnit summary (from pytest-junit.xml) ----------
+    $junitPath = Join-Path $env:SYSTEM_DEFAULTWORKINGDIRECTORY "pytest-junit.xml"
+
+    $tests = $passed = $failures = $errors = $skipped = 0
+    $failedNames = @()
+
+    if (Test-Path $junitPath) {
+      [xml]$j = Get-Content $junitPath
+
+      # pytest may output either <testsuite> root or <testsuites>
+      $suiteNodes = @()
+      if ($j.testsuite) { $suiteNodes = @($j.testsuite) }
+      elseif ($j.testsuites -and $j.testsuites.testsuite) { $suiteNodes = @($j.testsuites.testsuite) }
+
+      foreach ($s in $suiteNodes) {
+        $tests    += [int]$s.tests
+        $failures += [int]$s.failures
+        $errors   += [int]$s.errors
+        $skipped  += [int]$s.skipped
+
+        if ($s.testcase) {
+          foreach ($tc in $s.testcase) {
+            if ($tc.failure -or $tc.error) {
+              $name = $tc.name
+              if ($tc.classname) { $name = "$($tc.classname)::$($tc.name)" }
+              $failedNames += $name
+            }
+          }
+        }
+      }
+
+      $passed = $tests - $failures - $errors - $skipped
+      if ($passed -lt 0) { $passed = 0 }
+
+      # limit for email readability
+      $failedNames = $failedNames | Select-Object -First 10
+    } else {
+      $failedNames = @("JUnit report not found at: $junitPath")
+    }
+
+    # Link to build artifacts page (still useful for logs / allure-results artifact etc.)
+    $buildLink = "$env:SYSTEM_TEAMFOUNDATIONCOLLECTIONURI$env:SYSTEM_TEAMPROJECT/_build/results?buildId=$env:BUILD_BUILDID"
 
     $lines = @(
       "Hello Team,",
@@ -59,12 +95,33 @@ steps:
       "Pipeline : $env:BUILD_DEFINITIONNAME",
       "Build #  : $env:BUILD_BUILDNUMBER",
       "",
-      "Allure Results:",
-      $allureLink,
+      "Test Summary (Pytest):",
+      "Total   : $tests",
+      "Passed  : $passed",
+      "Failed  : $failures",
+      "Errors  : $errors",
+      "Skipped : $skipped",
+      ""
+    )
+
+    if ($failedNames.Count -gt 0 -and $failedNames[0] -notlike "JUnit report not found*") {
+      $lines += "Top Failures (up to 10):"
+      foreach ($f in $failedNames) { $lines += " - $f" }
+      $lines += ""
+    } elseif ($failedNames.Count -gt 0) {
+      $lines += "Note:"
+      foreach ($f in $failedNames) { $lines += " - $f" }
+      $lines += ""
+    }
+
+    $lines += @(
+      "Build Link:",
+      $buildLink,
       "",
       "Regards,",
       "Azure DevOps CI"
     )
+
     $body = $lines -join "`r`n"
 
     $securePass = ConvertTo-SecureString $smtpPass -AsPlainText -Force
@@ -81,3 +138,4 @@ steps:
       -Credential $cred
   displayName: "Send Email Notification"
   condition: always()
+
