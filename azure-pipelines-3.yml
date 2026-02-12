@@ -1,7 +1,6 @@
 trigger:
   branches:
     include:
-      - main
       - POC_SMOKE
 
 pool:
@@ -26,7 +25,7 @@ steps:
 
 - script: |
     echo Running test in interactive desktop
-    pytest ./tests/wja/poc --alluredir=allure-results --junitxml=pytest-junit.xml -p no:xdist -p no:rerunfailures"
+    "pytest ./tests/wja/poc --alluredir=allure-results --junitxml=pytest-junit.xml -p no:xdist -p no:rerunfailures"
   displayName: "Run POC UI test cases (foreground)"
   continueOnError: true
 
