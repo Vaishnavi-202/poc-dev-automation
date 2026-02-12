@@ -1,8 +1,7 @@
 trigger:
   branches:
     include:
-      - main
-      - POC_SMOKE
+      - none
 
 pool:
   name: local-docker-agent
