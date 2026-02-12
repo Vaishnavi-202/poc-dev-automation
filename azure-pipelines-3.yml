@@ -25,7 +25,7 @@ steps:
 
 - script: |
     echo Running test in interactive desktop
-    "pytest ./tests/wja/poc --alluredir=allure-results --junitxml=pytest-junit.xml -p no:xdist -p no:rerunfailures"
+    cmd /c pytest ./tests/wja/poc --alluredir=allure-results --junitxml=pytest-junit.xml -p no:xdist -p no:rerunfailures
   displayName: "Run POC UI test cases (foreground)"
   continueOnError: true
 
