@@ -38,36 +38,37 @@ steps:
     $downloadPath = "$(System.DefaultWorkingDirectory)\allure.zip"
     $extractPath = "$(System.DefaultWorkingDirectory)\allure-cli"
 
-    Write-Host "Downloading Allure CLI from: $zipUrl"
+    Write-Host "Downloading Allure CLI..."
     Invoke-WebRequest -Uri $zipUrl -OutFile $downloadPath
 
     Write-Host "Extracting Allure CLI..."
     Expand-Archive $downloadPath -DestinationPath $extractPath -Force
 
-    # The zip extracts to a folder like allure-2.xx.x
+    # Save full path to bin in pipeline variable
     $allureRoot = Get-ChildItem $extractPath | Where-Object { $_.PSIsContainer } | Select-Object -First 1
-    if (-not $allureRoot) { throw "Allure CLI folder not found after extraction." }
-
     $allureBin = Join-Path $allureRoot.FullName "bin"
-    if (-not (Test-Path $allureBin)) { throw "Allure bin folder not found at: $allureBin" }
 
-    $env:PATH += ";$allureBin"
-
-    allure --version
-  displayName: "Download & Setup Allure CLI (No Chocolatey)"
+    Write-Host "##vso[task.setvariable variable=ALLURE_BIN]$allureBin"
+  displayName: "Download & Setup Allure CLI"
   condition: always()
 
 - powershell: |
     $ErrorActionPreference = "Stop"
 
     if (-not (Test-Path "allure-results")) {
-      throw "allure-results folder not found. Pytest may not have produced Allure results."
+      throw "allure-results folder not found."
     }
 
-    allure generate "allure-results" --clean -o "allure-report"
+    $allureExe = Join-Path "$(ALLURE_BIN)" "allure.bat"
+
+    if (-not (Test-Path $allureExe)) {
+      throw "Allure executable not found at $allureExe"
+    }
+
+    & $allureExe generate "allure-results" --clean -o "allure-report"
 
     if (-not (Test-Path "allure-report\index.html")) {
-      throw "Allure HTML report not generated properly (index.html missing)."
+      throw "Allure report generation failed (index.html missing)."
     }
   displayName: "Generate Allure HTML report (static)"
   condition: always()
