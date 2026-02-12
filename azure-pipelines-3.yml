@@ -26,7 +26,7 @@ steps:
 
 - script: |
     echo Running test in interactive desktop
-    cmd /c "start /wait pytest ./tests/wja/poc --alluredir=allure-results --junitxml=pytest-junit.xml -p no:xdist -p no:rerunfailures"
+    pytest ./tests/wja/poc --alluredir=allure-results --junitxml=pytest-junit.xml -p no:xdist -p no:rerunfailures"
   displayName: "Run POC UI test cases (foreground)"
   continueOnError: true
 
@@ -53,24 +53,20 @@ steps:
   condition: always()
 
 - powershell: |
-    $ErrorActionPreference = "Stop"
-
-    if (-not (Test-Path "allure-results")) {
-      throw "allure-results folder not found."
-    }
-
-    $allureExe = Join-Path "$(ALLURE_BIN)" "allure.bat"
-
-    if (-not (Test-Path $allureExe)) {
-      throw "Allure executable not found at $allureExe"
-    }
-
-    & $allureExe generate "allure-results" --clean -o "allure-report"
-
     if (-not (Test-Path "allure-report\index.html")) {
-      throw "Allure report generation failed (index.html missing)."
+      throw "Allure report not generated."
     }
-  displayName: "Generate Allure HTML report (static)"
+
+    $zipPath = "$(System.DefaultWorkingDirectory)\allure-report.zip"
+
+    if (Test-Path $zipPath) {
+      Remove-Item $zipPath -Force
+    }
+
+    Compress-Archive -Path "allure-report\*" -DestinationPath $zipPath
+
+    Write-Host "##vso[task.setvariable variable=ALLURE_ZIP]$zipPath"
+  displayName: "Zip Allure Report"
   condition: always()
 
 - task: PublishBuildArtifacts@1
