@@ -1,6 +1,7 @@
 trigger:
   branches:
     include:
+      - main
       - POC_SMOKE
 
 pool:
@@ -23,12 +24,57 @@ steps:
     pip install pytest allure-pytest
   displayName: "Install test dependencies"
 
+# --- Define absolute output paths (no ambiguity) ---
+- powershell: |
+    $resultsDir = "$(System.DefaultWorkingDirectory)\allure-results"
+    $reportDir  = "$(System.DefaultWorkingDirectory)\allure-report"
+    $junitPath  = "$(System.DefaultWorkingDirectory)\pytest-junit.xml"
+    $zipPath    = "$(System.DefaultWorkingDirectory)\allure-report.zip"
+
+    Write-Host "##vso[task.setvariable variable=ALLURE_RESULTS_DIR]$resultsDir"
+    Write-Host "##vso[task.setvariable variable=ALLURE_REPORT_DIR]$reportDir"
+    Write-Host "##vso[task.setvariable variable=JUNIT_XML_PATH]$junitPath"
+    Write-Host "##vso[task.setvariable variable=ALLURE_ZIP_PATH]$zipPath"
+
+    Write-Host "Paths set:"
+    Write-Host "ALLURE_RESULTS_DIR = $resultsDir"
+    Write-Host "ALLURE_REPORT_DIR  = $reportDir"
+    Write-Host "JUNIT_XML_PATH     = $junitPath"
+    Write-Host "ALLURE_ZIP_PATH    = $zipPath"
+  displayName: "Set output paths"
+  condition: always()
+
+# --- Run pytest (no start/wait) ---
 - script: |
-    echo Running test in interactive desktop
-    cmd /c pytest ./tests/wja/poc --alluredir=allure-results --junitxml=pytest-junit.xml -p no:xdist -p no:rerunfailures
-  displayName: "Run POC UI test cases (foreground)"
+    echo Running tests...
+    pytest ./tests/wja/poc --alluredir="$(ALLURE_RESULTS_DIR)" --junitxml="$(JUNIT_XML_PATH)" -p no:xdist -p no:rerunfailures -vv
+  displayName: "Run POC UI test cases"
   continueOnError: true
 
+# --- Debug: prove what pytest produced (THIS will tell us the truth) ---
+- powershell: |
+    Write-Host "=== DEBUG: Did pytest generate JUnit XML? ==="
+    if (Test-Path "$(JUNIT_XML_PATH)") {
+      Write-Host "FOUND: $(JUNIT_XML_PATH)"
+      Get-Item "$(JUNIT_XML_PATH)" | Format-List
+    } else {
+      Write-Host "MISSING: $(JUNIT_XML_PATH)"
+    }
+
+    Write-Host "=== DEBUG: What is inside allure-results? ==="
+    if (Test-Path "$(ALLURE_RESULTS_DIR)") {
+      Get-ChildItem -Path "$(ALLURE_RESULTS_DIR)" -Recurse | Select-Object FullName, Length
+      $jsonCount = (Get-ChildItem "$(ALLURE_RESULTS_DIR)" -Filter "*.json" -Recurse -ErrorAction SilentlyContinue | Measure-Object).Count
+      Write-Host "Allure JSON file count: $jsonCount"
+      Write-Host "##vso[task.setvariable variable=ALLURE_JSON_COUNT]$jsonCount"
+    } else {
+      Write-Host "allure-results folder NOT found."
+      Write-Host "##vso[task.setvariable variable=ALLURE_JSON_COUNT]0"
+    }
+  displayName: "Debug: Verify outputs"
+  condition: always()
+
+# --- Download Allure CLI (no Chocolatey) ---
 - powershell: |
     $ErrorActionPreference = "Stop"
 
@@ -37,45 +83,76 @@ steps:
     $downloadPath = "$(System.DefaultWorkingDirectory)\allure.zip"
     $extractPath = "$(System.DefaultWorkingDirectory)\allure-cli"
 
-    Write-Host "Downloading Allure CLI..."
     Invoke-WebRequest -Uri $zipUrl -OutFile $downloadPath
-
-    Write-Host "Extracting Allure CLI..."
     Expand-Archive $downloadPath -DestinationPath $extractPath -Force
 
-    # Save full path to bin in pipeline variable
     $allureRoot = Get-ChildItem $extractPath | Where-Object { $_.PSIsContainer } | Select-Object -First 1
     $allureBin = Join-Path $allureRoot.FullName "bin"
+    $allureExe = Join-Path $allureBin "allure.bat"
 
-    Write-Host "##vso[task.setvariable variable=ALLURE_BIN]$allureBin"
-  displayName: "Download & Setup Allure CLI"
+    if (-not (Test-Path $allureExe)) { throw "Allure executable not found at $allureExe" }
+
+    Write-Host "##vso[task.setvariable variable=ALLURE_EXE]$allureExe"
+    & $allureExe --version
+  displayName: "Download Allure CLI"
   condition: always()
 
+# --- Generate static Allure report ONLY if JSON exists ---
 - powershell: |
-    if (-not (Test-Path "allure-report\index.html")) {
-      throw "Allure report not generated."
+    $ErrorActionPreference = "Stop"
+
+    if ([int]"$(ALLURE_JSON_COUNT)" -le 0) {
+      Write-Host "Skipping Allure HTML generation because ALLURE_JSON_COUNT=$(ALLURE_JSON_COUNT)."
+      Write-Host "##vso[task.setvariable variable=ALLURE_HTML_READY]false"
+      exit 0
     }
 
-    $zipPath = "$(System.DefaultWorkingDirectory)\allure-report.zip"
+    if (Test-Path "$(ALLURE_REPORT_DIR)") { Remove-Item "$(ALLURE_REPORT_DIR)" -Recurse -Force }
 
-    if (Test-Path $zipPath) {
-      Remove-Item $zipPath -Force
+    & "$(ALLURE_EXE)" generate "$(ALLURE_RESULTS_DIR)" --clean -o "$(ALLURE_REPORT_DIR)"
+
+    if (Test-Path "$(ALLURE_REPORT_DIR)\index.html") {
+      Write-Host "Allure HTML generated successfully."
+      Write-Host "##vso[task.setvariable variable=ALLURE_HTML_READY]true"
+    } else {
+      Write-Host "Allure HTML generation ran but index.html is missing."
+      Write-Host "##vso[task.setvariable variable=ALLURE_HTML_READY]false"
     }
-
-    Compress-Archive -Path "allure-report\*" -DestinationPath $zipPath
-
-    Write-Host "##vso[task.setvariable variable=ALLURE_ZIP]$zipPath"
-  displayName: "Zip Allure Report"
+  displayName: "Generate Allure HTML (static)"
   condition: always()
 
+# --- Zip report ONLY if HTML exists ---
+- powershell: |
+    if ("$(ALLURE_HTML_READY)" -ne "true") {
+      Write-Host "Skipping ZIP because Allure HTML not ready."
+      Write-Host "##vso[task.setvariable variable=ALLURE_ZIP_READY]false"
+      exit 0
+    }
+
+    if (Test-Path "$(ALLURE_ZIP_PATH)") { Remove-Item "$(ALLURE_ZIP_PATH)" -Force }
+
+    Compress-Archive -Path "$(ALLURE_REPORT_DIR)\*" -DestinationPath "$(ALLURE_ZIP_PATH)" -Force
+
+    if (Test-Path "$(ALLURE_ZIP_PATH)") {
+      Write-Host "Allure ZIP created: $(ALLURE_ZIP_PATH)"
+      Write-Host "##vso[task.setvariable variable=ALLURE_ZIP_READY]true"
+    } else {
+      Write-Host "Failed to create ZIP."
+      Write-Host "##vso[task.setvariable variable=ALLURE_ZIP_READY]false"
+    }
+  displayName: "Zip Allure report"
+  condition: always()
+
+# --- Publish HTML as artifact (nice-to-have fallback) ---
 - task: PublishBuildArtifacts@1
   displayName: "Publish Allure HTML Artifact"
   condition: always()
   inputs:
-    PathtoPublish: "allure-report"
+    PathtoPublish: "$(ALLURE_REPORT_DIR)"
     ArtifactName: "AllureReport"
     publishLocation: "Container"
 
+# --- Email summary + (optional) attachment if ZIP exists ---
 - powershell: |
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
@@ -84,17 +161,14 @@ steps:
     $smtpUser   = "$(SMTP_USER)"
     $smtpPass   = "$(SMTP_PASSWORD)"
 
-    if ([string]::IsNullOrWhiteSpace($smtpUser)) { throw "SMTP_USER is empty. Set it in pipeline variables." }
-    if ([string]::IsNullOrWhiteSpace($smtpPass)) { throw "SMTP_PASSWORD is empty. Set it as a secret pipeline variable (Gmail App Password)." }
-
     $from = $smtpUser
     $to   = @("qa1@gmail.com","qa2@gmail.com")
 
     $status = $env:AGENT_JOBSTATUS
     if ([string]::IsNullOrWhiteSpace($status)) { $status = "Unknown" }
 
-    # -------- JUnit summary (from pytest-junit.xml) ----------
-    $junitPath = Join-Path $env:SYSTEM_DEFAULTWORKINGDIRECTORY "pytest-junit.xml"
+    # -------- JUnit summary ----------
+    $junitPath = "$(JUNIT_XML_PATH)"
 
     $tests = $passed = $failures = $errors = $skipped = 0
     $failedNames = @()
@@ -125,13 +199,11 @@ steps:
 
       $passed = $tests - $failures - $errors - $skipped
       if ($passed -lt 0) { $passed = 0 }
-
       $failedNames = $failedNames | Select-Object -First 10
     } else {
       $failedNames = @("JUnit report not found at: $junitPath")
     }
 
-    # Links
     $artifactLink = "$env:SYSTEM_TEAMFOUNDATIONCOLLECTIONURI$env:SYSTEM_TEAMPROJECT/_build/results?buildId=$env:BUILD_BUILDID&view=artifacts&type=publishedArtifacts"
     $buildLink    = "$env:SYSTEM_TEAMFOUNDATIONCOLLECTIONURI$env:SYSTEM_TEAMPROJECT/_build/results?buildId=$env:BUILD_BUILDID"
 
@@ -150,6 +222,8 @@ steps:
       "Failed  : $failures",
       "Errors  : $errors",
       "Skipped : $skipped",
+      "",
+      "Allure JSON Count: $(ALLURE_JSON_COUNT)",
       ""
     )
 
@@ -163,16 +237,20 @@ steps:
       $lines += ""
     }
 
+    if ("$(ALLURE_ZIP_READY)" -eq "true") {
+      $lines += "Allure Detailed Report: Attached as allure-report.zip"
+      $lines += ""
+    } else {
+      $lines += "Allure Detailed Report (Artifact fallback):"
+      $lines += $artifactLink
+      $lines += ""
+      $lines += "If the report looks empty, it means allure-results had no JSON files."
+      $lines += ""
+    }
+
     $lines += @(
-      "Allure HTML Report (Artifact):",
-      $artifactLink,
-      "",
       "Build Link:",
       $buildLink,
-      "",
-      "Open steps for report:",
-      "1) Click the Allure HTML Report link",
-      "2) Artifacts -> AllureReport -> index.html",
       "",
       "Regards,",
       "Azure DevOps CI"
@@ -183,14 +261,27 @@ steps:
     $securePass = ConvertTo-SecureString $smtpPass -AsPlainText -Force
     $cred = New-Object System.Management.Automation.PSCredential ($smtpUser, $securePass)
 
-    Send-MailMessage `
-      -From $from `
-      -To $to `
-      -Subject "POC UI Tests - $status | Build $env:BUILD_BUILDNUMBER" `
-      -Body $body `
-      -SmtpServer $smtpServer `
-      -Port $smtpPort `
-      -UseSsl `
-      -Credential $cred
+    if ("$(ALLURE_ZIP_READY)" -eq "true" -and (Test-Path "$(ALLURE_ZIP_PATH)")) {
+      Send-MailMessage `
+        -From $from `
+        -To $to `
+        -Subject "POC UI Tests - $status | Build $env:BUILD_BUILDNUMBER" `
+        -Body $body `
+        -SmtpServer $smtpServer `
+        -Port $smtpPort `
+        -UseSsl `
+        -Credential $cred `
+        -Attachments "$(ALLURE_ZIP_PATH)"
+    } else {
+      Send-MailMessage `
+        -From $from `
+        -To $to `
+        -Subject "POC UI Tests - $status | Build $env:BUILD_BUILDNUMBER" `
+        -Body $body `
+        -SmtpServer $smtpServer `
+        -Port $smtpPort `
+        -UseSsl `
+        -Credential $cred
+    }
   displayName: "Send Email Notification"
   condition: always()
