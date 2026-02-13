@@ -29,6 +29,75 @@ steps:
     cmd /c "start /wait pytest ./tests/wja/poc --alluredir=allure-results --junitxml=pytest-junit.xml -p no:xdist -p no:rerunfailures"
   displayName: "Run POC UI test cases (foreground)"
 
+# -------------------------
+# Allure: download portable CLI (no Chocolatey), generate HTML report, publish artifact
+# -------------------------
+- powershell: |
+    $ErrorActionPreference = "Stop"
+
+    $ver = "2.27.0"
+    $url = "https://github.com/allure-framework/allure2/releases/download/$ver/allure-$ver.zip"
+    $zip = "$(Pipeline.Workspace)\allure-$ver.zip"
+    $dir = "$(Pipeline.Workspace)\allure-$ver"
+
+    Write-Host "Downloading Allure CLI $ver..."
+    Invoke-WebRequest -Uri $url -OutFile $zip
+
+    if (Test-Path $dir) { Remove-Item $dir -Recurse -Force }
+    Expand-Archive -Path $zip -DestinationPath $dir -Force
+
+    $allureBat = Join-Path $dir "allure-$ver\bin\allure.bat"
+    if (!(Test-Path $allureBat)) { throw "Allure not found at $allureBat" }
+
+    Write-Host "##vso[task.setvariable variable=ALLURE_BAT]$allureBat"
+    & $allureBat --version
+  displayName: "Download Allure CLI (portable)"
+  condition: always()
+
+- powershell: |
+    $ErrorActionPreference = "Stop"
+
+    if (!(Test-Path "allure-results")) { throw "allure-results folder not found" }
+
+    $allureBat = "$(ALLURE_BAT)"
+    if ([string]::IsNullOrWhiteSpace($allureBat) -or !(Test-Path $allureBat)) {
+      throw "ALLURE_BAT not set / not found: $allureBat"
+    }
+
+    & $allureBat generate "allure-results" -o "allure-report" --clean
+
+    if (!(Test-Path "allure-report\index.html")) { throw "Allure report not generated (index.html missing)" }
+
+    Write-Host "Allure HTML generated at: $(Get-Location)\allure-report"
+  displayName: "Generate Allure HTML report"
+  condition: always()
+
+- task: PublishPipelineArtifact@1
+  displayName: "Publish Allure HTML report (artifact)"
+  inputs:
+    targetPath: "allure-report"
+    artifactName: "allure-report"
+  condition: always()
+
+# Optional: also publish raw allure-results (helpful for debugging/re-generation)
+- task: PublishPipelineArtifact@1
+  displayName: "Publish Allure results (raw)"
+  inputs:
+    targetPath: "allure-results"
+    artifactName: "allure-results"
+  condition: always()
+
+# Optional: publish JUnit xml too
+- task: PublishPipelineArtifact@1
+  displayName: "Publish Pytest JUnit XML"
+  inputs:
+    targetPath: "pytest-junit.xml"
+    artifactName: "pytest-junit.xml"
+  condition: always()
+
+# -------------------------
+# Email notification (includes artifact link)
+# -------------------------
 - powershell: |
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
@@ -36,6 +105,9 @@ steps:
     $smtpPort   = 587
     $smtpUser   = "$(SMTP_USER)"
     $smtpPass   = "$(SMTP_PASSWORD)"
+
+    if ([string]::IsNullOrWhiteSpace($smtpUser)) { throw "SMTP_USER is empty." }
+    if ([string]::IsNullOrWhiteSpace($smtpPass)) { throw "SMTP_PASSWORD is empty (secret var). Use Gmail App Password." }
 
     $from = $smtpUser
     $to   = @("qa1@gmail.com","qa2@gmail.com")
@@ -52,7 +124,6 @@ steps:
     if (Test-Path $junitPath) {
       [xml]$j = Get-Content $junitPath
 
-      # pytest may output either <testsuite> root or <testsuites>
       $suiteNodes = @()
       if ($j.testsuite) { $suiteNodes = @($j.testsuite) }
       elseif ($j.testsuites -and $j.testsuites.testsuite) { $suiteNodes = @($j.testsuites.testsuite) }
@@ -77,14 +148,14 @@ steps:
       $passed = $tests - $failures - $errors - $skipped
       if ($passed -lt 0) { $passed = 0 }
 
-      # limit for email readability
       $failedNames = $failedNames | Select-Object -First 10
     } else {
       $failedNames = @("JUnit report not found at: $junitPath")
     }
 
-    # Link to build artifacts page (still useful for logs / allure-results artifact etc.)
+    # Links
     $buildLink = "$env:SYSTEM_TEAMFOUNDATIONCOLLECTIONURI$env:SYSTEM_TEAMPROJECT/_build/results?buildId=$env:BUILD_BUILDID"
+    $artifactLink = "$env:SYSTEM_TEAMFOUNDATIONCOLLECTIONURI$env:SYSTEM_TEAMPROJECT/_build/results?buildId=$env:BUILD_BUILDID&view=artifacts&type=publishedArtifacts"
 
     $lines = @(
       "Hello Team,",
@@ -115,6 +186,9 @@ steps:
     }
 
     $lines += @(
+      "Allure HTML Report (Artifact):",
+      $artifactLink,
+      "",
       "Build Link:",
       $buildLink,
       "",
@@ -138,4 +212,3 @@ steps:
       -Credential $cred
   displayName: "Send Email Notification"
   condition: always()
-
