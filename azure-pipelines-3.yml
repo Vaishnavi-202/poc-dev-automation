@@ -64,29 +64,8 @@ steps:
 # Run UI tests
 # -------------------------
 - powershell: |
-    $ErrorActionPreference = "Continue"
-
-    # Clean previous outputs to avoid stale reports
-    if (Test-Path "allure-results") { Remove-Item "allure-results" -Recurse -Force }
-    if (Test-Path "allure-report")  { Remove-Item "allure-report"  -Recurse -Force }
-    if (Test-Path "pytest-junit.xml") { Remove-Item "pytest-junit.xml" -Force }
-
-    # IMPORTANT:
-    # If you truly need interactive desktop session, keep Start-Process.
-    # It's still more reliable than cmd start /wait.
-    $args = @(
-      ".\tests\wja\poc",
-      "--alluredir=allure-results",
-      "--clean-alluredir",
-      "--junitxml=pytest-junit.xml",
-      "-p", "no:xdist",
-      "-p", "no:rerunfailures"
-    )
-
-    Write-Host "Running: pytest $($args -join ' ')"
-    $p = Start-Process -FilePath "pytest" -ArgumentList $args -Wait -PassThru -NoNewWindow
-    $exit = $p.ExitCode
-    Write-Host "Pytest exit code: $exit"
+    echo Running test in interactive desktop
+    Start-Process -FilePath "pytest" -ArgumentList ".\tests\wja\poc --alluredir=allure-results --junitxml=pytest-junit.xml -p no:xdist -p no:rerunfailures"
 
     # propagate exit code so pipeline reflects test failures
     exit $exit
