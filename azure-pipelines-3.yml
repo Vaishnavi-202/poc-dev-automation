@@ -4,41 +4,120 @@ trigger:
       - main
       - POC_SMOKE
 
+pr: none
+
 pool:
   name: local-docker-agent
   demands:
     - Agent.Name -equals local-docker-02
 
+variables:
+  # Keep everything deterministic
+  WORKDIR: $(Build.SourcesDirectory)
+  PIP_CACHE_DIR: $(Pipeline.Workspace)\.pipcache
+
+  # Allure CLI portable
+  ALLURE_VERSION: "2.27.0"
+  ALLURE_ZIP: "$(Pipeline.Workspace)\\allure-$(ALLURE_VERSION).zip"
+  ALLURE_DIR: "$(Pipeline.Workspace)\\allure-$(ALLURE_VERSION)"
+
 steps:
 - checkout: self
+  clean: true
 
-- script: |
-    echo Checking Python installation
+# -------------------------
+# Verify Python
+# -------------------------
+- powershell: |
+    $ErrorActionPreference = "Stop"
+    Write-Host "Working directory: $(WORKDIR)"
     python --version
     pip --version
   displayName: "Verify Python"
-
-- script: |
-    python -m pip install --upgrade pip
-    pip install -r requirements.txt
-    pip install pytest allure-pytest
-  displayName: "Install test dependencies"
-
-- script: |
-    echo Running test in interactive desktop
-    cmd /c "start /wait pytest ./tests/wja/poc --alluredir=allure-results --junitxml=pytest-junit.xml -p no:xdist -p no:rerunfailures"
-  displayName: "Run POC UI test cases (foreground)"
+  workingDirectory: $(WORKDIR)
 
 # -------------------------
-# Allure: download portable CLI (no Chocolatey), generate HTML report, publish artifact
+# Cache pip + Install deps
+# -------------------------
+- task: Cache@2
+  inputs:
+    key: 'pip | "$(Agent.OS)" | requirements.txt'
+    restoreKeys: |
+      pip | "$(Agent.OS)"
+    path: $(PIP_CACHE_DIR)
+  displayName: "Cache pip"
+  continueOnError: true
+
+- powershell: |
+    $ErrorActionPreference = "Stop"
+    python -m pip install --upgrade pip
+    pip config set global.cache-dir "$(PIP_CACHE_DIR)"
+    pip install -r requirements.txt
+
+    # Prefer pinning these in requirements.txt, but kept here for now to match your pipeline
+    pip install pytest allure-pytest
+    pytest --version
+  displayName: "Install test dependencies"
+  workingDirectory: $(WORKDIR)
+
+# -------------------------
+# Run UI tests
+# -------------------------
+- powershell: |
+    $ErrorActionPreference = "Continue"
+
+    # Clean previous outputs to avoid stale reports
+    if (Test-Path "allure-results") { Remove-Item "allure-results" -Recurse -Force }
+    if (Test-Path "allure-report")  { Remove-Item "allure-report"  -Recurse -Force }
+    if (Test-Path "pytest-junit.xml") { Remove-Item "pytest-junit.xml" -Force }
+
+    # IMPORTANT:
+    # If you truly need interactive desktop session, keep Start-Process.
+    # It's still more reliable than cmd start /wait.
+    $args = @(
+      ".\tests\wja\poc",
+      "--alluredir=allure-results",
+      "--clean-alluredir",
+      "--junitxml=pytest-junit.xml",
+      "-p", "no:xdist",
+      "-p", "no:rerunfailures"
+    )
+
+    Write-Host "Running: pytest $($args -join ' ')"
+    $p = Start-Process -FilePath "pytest" -ArgumentList $args -Wait -PassThru -NoNewWindow
+    $exit = $p.ExitCode
+    Write-Host "Pytest exit code: $exit"
+
+    # propagate exit code so pipeline reflects test failures
+    exit $exit
+  displayName: "Run POC UI test cases"
+  workingDirectory: $(WORKDIR)
+  timeoutInMinutes: 120
+
+# -------------------------
+# Publish test results to Azure DevOps Tests tab (STANDARD)
+# -------------------------
+- task: PublishTestResults@2
+  displayName: "Publish Pytest results (Tests tab)"
+  inputs:
+    testResultsFormat: "JUnit"
+    testResultsFiles: "pytest-junit.xml"
+    searchFolder: "$(WORKDIR)"
+    mergeTestResults: true
+    failTaskOnFailedTests: false
+    testRunTitle: "POC UI Smoke Tests"
+  condition: always()
+
+# -------------------------
+# Download Allure CLI (portable), generate HTML, publish artifacts
 # -------------------------
 - powershell: |
     $ErrorActionPreference = "Stop"
 
-    $ver = "2.27.0"
+    $ver = "$(ALLURE_VERSION)"
     $url = "https://github.com/allure-framework/allure2/releases/download/$ver/allure-$ver.zip"
-    $zip = "$(Pipeline.Workspace)\allure-$ver.zip"
-    $dir = "$(Pipeline.Workspace)\allure-$ver"
+    $zip = "$(ALLURE_ZIP)"
+    $dir = "$(ALLURE_DIR)"
 
     Write-Host "Downloading Allure CLI $ver..."
     Invoke-WebRequest -Uri $url -OutFile $zip
@@ -53,162 +132,180 @@ steps:
     & $allureBat --version
   displayName: "Download Allure CLI (portable)"
   condition: always()
+  workingDirectory: $(WORKDIR)
 
 - powershell: |
-    $ErrorActionPreference = "Stop"
-
-    if (!(Test-Path "allure-results")) { throw "allure-results folder not found" }
+    $ErrorActionPreference = "Continue"
 
     $allureBat = "$(ALLURE_BAT)"
     if ([string]::IsNullOrWhiteSpace($allureBat) -or !(Test-Path $allureBat)) {
       throw "ALLURE_BAT not set / not found: $allureBat"
     }
 
+    if (!(Test-Path "allure-results")) {
+      Write-Host "##vso[task.logissue type=warning]allure-results folder not found. Skipping Allure HTML generation."
+      exit 0
+    }
+
+    $count = (Get-ChildItem "allure-results" -File -ErrorAction SilentlyContinue | Measure-Object).Count
+    Write-Host "Allure result files count: $count"
+    if ($count -eq 0) {
+      Write-Host "##vso[task.logissue type=warning]allure-results is empty. Allure HTML may be empty."
+    }
+
     & $allureBat generate "allure-results" -o "allure-report" --clean
 
-    if (!(Test-Path "allure-report\index.html")) { throw "Allure report not generated (index.html missing)" }
+    if (!(Test-Path "allure-report\index.html")) {
+      Write-Host "##vso[task.logissue type=warning]Allure report not generated (index.html missing)."
+      exit 0
+    }
 
     Write-Host "Allure HTML generated at: $(Get-Location)\allure-report"
   displayName: "Generate Allure HTML report"
   condition: always()
+  workingDirectory: $(WORKDIR)
 
 - task: PublishPipelineArtifact@1
   displayName: "Publish Allure HTML report (artifact)"
   inputs:
-    targetPath: "allure-report"
+    targetPath: "$(WORKDIR)\\allure-report"
     artifactName: "allure-report"
   condition: always()
 
-# Optional: also publish raw allure-results (helpful for debugging/re-generation)
 - task: PublishPipelineArtifact@1
   displayName: "Publish Allure results (raw)"
   inputs:
-    targetPath: "allure-results"
+    targetPath: "$(WORKDIR)\\allure-results"
     artifactName: "allure-results"
   condition: always()
 
-# Optional: publish JUnit xml too
+# Keep raw junit accessible too (optional; Tests tab is the real standard)
 - task: PublishPipelineArtifact@1
-  displayName: "Publish Pytest JUnit XML"
+  displayName: "Publish Pytest JUnit XML (artifact)"
   inputs:
-    targetPath: "pytest-junit.xml"
+    targetPath: "$(WORKDIR)\\pytest-junit.xml"
     artifactName: "pytest-junit.xml"
   condition: always()
 
 # -------------------------
-# Email notification (includes artifact link)
+# Email notification (robust: does not fail pipeline if email fails)
 # -------------------------
 - powershell: |
-    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    $ErrorActionPreference = "Continue"
+    try {
+      [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-    $smtpServer = "smtp.gmail.com"
-    $smtpPort   = 587
-    $smtpUser   = "$(SMTP_USER)"
-    $smtpPass   = "$(SMTP_PASSWORD)"
+      $smtpServer = "smtp.gmail.com"
+      $smtpPort   = 587
+      $smtpUser   = "$(SMTP_USER)"
+      $smtpPass   = "$(SMTP_PASSWORD)"
 
-    if ([string]::IsNullOrWhiteSpace($smtpUser)) { throw "SMTP_USER is empty." }
-    if ([string]::IsNullOrWhiteSpace($smtpPass)) { throw "SMTP_PASSWORD is empty (secret var). Use Gmail App Password." }
+      if ([string]::IsNullOrWhiteSpace($smtpUser)) { throw "SMTP_USER is empty." }
+      if ([string]::IsNullOrWhiteSpace($smtpPass)) { throw "SMTP_PASSWORD is empty (secret var)." }
 
-    $from = $smtpUser
-    $to   = @("qa1@gmail.com","qa2@gmail.com")
+      $from = $smtpUser
+      $to   = @("qa1@gmail.com","qa2@gmail.com")  # move to vars if needed
 
-    $status = $env:AGENT_JOBSTATUS
-    if ([string]::IsNullOrWhiteSpace($status)) { $status = "Unknown" }
+      $status = $env:AGENT_JOBSTATUS
+      if ([string]::IsNullOrWhiteSpace($status)) { $status = "Unknown" }
 
-    # -------- JUnit summary (from pytest-junit.xml) ----------
-    $junitPath = Join-Path $env:SYSTEM_DEFAULTWORKINGDIRECTORY "pytest-junit.xml"
+      # Links
+      $buildLink = "$env:SYSTEM_TEAMFOUNDATIONCOLLECTIONURI$env:SYSTEM_TEAMPROJECT/_build/results?buildId=$env:BUILD_BUILDID"
+      $artifactLink = "$env:SYSTEM_TEAMFOUNDATIONCOLLECTIONURI$env:SYSTEM_TEAMPROJECT/_build/results?buildId=$env:BUILD_BUILDID&view=artifacts&type=publishedArtifacts"
 
-    $tests = $passed = $failures = $errors = $skipped = 0
-    $failedNames = @()
+      # Test summary from junit
+      $junitPath = Join-Path "$(WORKDIR)" "pytest-junit.xml"
+      $tests = $passed = $failures = $errors = $skipped = 0
+      $failedNames = @()
 
-    if (Test-Path $junitPath) {
-      [xml]$j = Get-Content $junitPath
+      if (Test-Path $junitPath) {
+        [xml]$j = Get-Content $junitPath
+        $suiteNodes = @()
+        if ($j.testsuite) { $suiteNodes = @($j.testsuite) }
+        elseif ($j.testsuites -and $j.testsuites.testsuite) { $suiteNodes = @($j.testsuites.testsuite) }
 
-      $suiteNodes = @()
-      if ($j.testsuite) { $suiteNodes = @($j.testsuite) }
-      elseif ($j.testsuites -and $j.testsuites.testsuite) { $suiteNodes = @($j.testsuites.testsuite) }
+        foreach ($s in $suiteNodes) {
+          $tests    += [int]$s.tests
+          $failures += [int]$s.failures
+          $errors   += [int]$s.errors
+          $skipped  += [int]$s.skipped
 
-      foreach ($s in $suiteNodes) {
-        $tests    += [int]$s.tests
-        $failures += [int]$s.failures
-        $errors   += [int]$s.errors
-        $skipped  += [int]$s.skipped
-
-        if ($s.testcase) {
-          foreach ($tc in $s.testcase) {
-            if ($tc.failure -or $tc.error) {
-              $name = $tc.name
-              if ($tc.classname) { $name = "$($tc.classname)::$($tc.name)" }
-              $failedNames += $name
+          if ($s.testcase) {
+            foreach ($tc in $s.testcase) {
+              if ($tc.failure -or $tc.error) {
+                $name = $tc.name
+                if ($tc.classname) { $name = "$($tc.classname)::$($tc.name)" }
+                $failedNames += $name
+              }
             }
           }
         }
+
+        $passed = $tests - $failures - $errors - $skipped
+        if ($passed -lt 0) { $passed = 0 }
+        $failedNames = $failedNames | Select-Object -First 10
+      } else {
+        $failedNames = @("JUnit report not found at: $junitPath")
       }
 
-      $passed = $tests - $failures - $errors - $skipped
-      if ($passed -lt 0) { $passed = 0 }
+      $lines = @(
+        "Hello Team,",
+        "",
+        "POC UI Smoke Test execution completed.",
+        "",
+        "Status   : $status",
+        "Pipeline : $env:BUILD_DEFINITIONNAME",
+        "Build #  : $env:BUILD_BUILDNUMBER",
+        "",
+        "Test Summary (Pytest):",
+        "Total   : $tests",
+        "Passed  : $passed",
+        "Failed  : $failures",
+        "Errors  : $errors",
+        "Skipped : $skipped",
+        ""
+      )
 
-      $failedNames = $failedNames | Select-Object -First 10
-    } else {
-      $failedNames = @("JUnit report not found at: $junitPath")
+      if ($failedNames.Count -gt 0 -and $failedNames[0] -notlike "JUnit report not found*") {
+        $lines += "Top Failures (up to 10):"
+        foreach ($f in $failedNames) { $lines += " - $f" }
+        $lines += ""
+      } elseif ($failedNames.Count -gt 0) {
+        $lines += "Note:"
+        foreach ($f in $failedNames) { $lines += " - $f" }
+        $lines += ""
+      }
+
+      $lines += @(
+        "Allure HTML Report (Artifact):",
+        $artifactLink,
+        "",
+        "Build Link:",
+        $buildLink,
+        "",
+        "Regards,",
+        "Azure DevOps CI"
+      )
+
+      $body = $lines -join "`r`n"
+
+      $securePass = ConvertTo-SecureString $smtpPass -AsPlainText -Force
+      $cred = New-Object System.Management.Automation.PSCredential ($smtpUser, $securePass)
+
+      Send-MailMessage `
+        -From $from `
+        -To $to `
+        -Subject "POC UI Smoke Tests - $status | Build $env:BUILD_BUILDNUMBER" `
+        -Body $body `
+        -SmtpServer $smtpServer `
+        -Port $smtpPort `
+        -UseSsl `
+        -Credential $cred
+
+      Write-Host "Email sent."
+    } catch {
+      Write-Host "##vso[task.logissue type=warning]Email notification failed: $($_.Exception.Message)"
     }
-
-    # Links
-    $buildLink = "$env:SYSTEM_TEAMFOUNDATIONCOLLECTIONURI$env:SYSTEM_TEAMPROJECT/_build/results?buildId=$env:BUILD_BUILDID"
-    $artifactLink = "$env:SYSTEM_TEAMFOUNDATIONCOLLECTIONURI$env:SYSTEM_TEAMPROJECT/_build/results?buildId=$env:BUILD_BUILDID&view=artifacts&type=publishedArtifacts"
-
-    $lines = @(
-      "Hello Team,",
-      "",
-      "POC UI Test execution is completed.",
-      "",
-      "Status   : $status",
-      "Pipeline : $env:BUILD_DEFINITIONNAME",
-      "Build #  : $env:BUILD_BUILDNUMBER",
-      "",
-      "Test Summary (Pytest):",
-      "Total   : $tests",
-      "Passed  : $passed",
-      "Failed  : $failures",
-      "Errors  : $errors",
-      "Skipped : $skipped",
-      ""
-    )
-
-    if ($failedNames.Count -gt 0 -and $failedNames[0] -notlike "JUnit report not found*") {
-      $lines += "Top Failures (up to 10):"
-      foreach ($f in $failedNames) { $lines += " - $f" }
-      $lines += ""
-    } elseif ($failedNames.Count -gt 0) {
-      $lines += "Note:"
-      foreach ($f in $failedNames) { $lines += " - $f" }
-      $lines += ""
-    }
-
-    $lines += @(
-      "Allure HTML Report (Artifact):",
-      $artifactLink,
-      "",
-      "Build Link:",
-      $buildLink,
-      "",
-      "Regards,",
-      "Azure DevOps CI"
-    )
-
-    $body = $lines -join "`r`n"
-
-    $securePass = ConvertTo-SecureString $smtpPass -AsPlainText -Force
-    $cred = New-Object System.Management.Automation.PSCredential ($smtpUser, $securePass)
-
-    Send-MailMessage `
-      -From $from `
-      -To $to `
-      -Subject "POC UI Tests - $status | Build $env:BUILD_BUILDNUMBER" `
-      -Body $body `
-      -SmtpServer $smtpServer `
-      -Port $smtpPort `
-      -UseSsl `
-      -Credential $cred
   displayName: "Send Email Notification"
   condition: always()
+  workingDirectory: $(WORKDIR)
