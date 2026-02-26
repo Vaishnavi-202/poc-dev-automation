@@ -9,6 +9,11 @@ pool:
   demands:
     - Agent.Name -equals local-docker-02
 
+variables:
+  ALLURE_RESULTS: '$(Build.SourcesDirectory)\allure-results'
+  ALLURE_REPORT:  '$(Build.SourcesDirectory)\allure-report'
+  JUNIT_XML:      '$(Build.SourcesDirectory)\pytest-junit.xml'
+
 steps:
 - checkout: self
 
@@ -24,13 +29,40 @@ steps:
     pip install pytest allure-pytest
   displayName: "Install test dependencies"
 
+# Clean outputs each run (prevents mixing old+new)
+- powershell: |
+    $ErrorActionPreference = "Stop"
+    if (Test-Path "$(ALLURE_RESULTS)") { Remove-Item "$(ALLURE_RESULTS)" -Recurse -Force }
+    if (Test-Path "$(ALLURE_REPORT)")  { Remove-Item "$(ALLURE_REPORT)"  -Recurse -Force }
+    if (Test-Path "$(JUNIT_XML)")      { Remove-Item "$(JUNIT_XML)" -Force }
+    New-Item -ItemType Directory -Path "$(ALLURE_RESULTS)" | Out-Null
+    Write-Host "Prepared folders."
+  displayName: "Prep output folders"
+  condition: always()
+
+# IMPORTANT:
+# start /wait can change the working directory, so we force /D and absolute paths.
 - script: |
     echo Running test in interactive desktop
-    cmd /c "start /wait pytest ./tests/wja/poc --alluredir=allure-results --junitxml=pytest-junit.xml -p no:xdist -p no:rerunfailures"
+    cmd /c "start /wait /D "$(Build.SourcesDirectory)" pytest ./tests/wja/poc --alluredir="$(ALLURE_RESULTS)" --clean-alluredir --junitxml="$(JUNIT_XML)" -p no:xdist -p no:rerunfailures"
   displayName: "Run POC UI test cases (foreground)"
+  condition: always()
+
+# Sanity check: if no json files, Allure HTML will look empty
+- powershell: |
+    $ErrorActionPreference = "Stop"
+    if (!(Test-Path "$(ALLURE_RESULTS)")) { throw "Allure results folder not found: $(ALLURE_RESULTS)" }
+    $json = Get-ChildItem -Path "$(ALLURE_RESULTS)" -Filter *.json -File -ErrorAction SilentlyContinue
+    Write-Host "Allure JSON files: $($json.Count)"
+    if ($json.Count -eq 0) {
+      Get-ChildItem "$(ALLURE_RESULTS)" | Select-Object -First 50 | ForEach-Object { Write-Host $_.Name }
+      throw "No Allure JSON files found. Report will be empty."
+    }
+  displayName: "Verify Allure results not empty"
+  condition: always()
 
 # -------------------------
-# Allure: download portable CLI (no Chocolatey), generate HTML report, publish artifact
+# Allure CLI (portable), generate HTML report
 # -------------------------
 - powershell: |
     $ErrorActionPreference = "Stop"
@@ -38,12 +70,15 @@ steps:
     $url = "https://github.com/allure-framework/allure2/releases/download/$ver/allure-$ver.zip"
     $zip = "$(Pipeline.Workspace)\allure-$ver.zip"
     $dir = "$(Pipeline.Workspace)\allure-$ver"
+
     Write-Host "Downloading Allure CLI $ver..."
     Invoke-WebRequest -Uri $url -OutFile $zip
     if (Test-Path $dir) { Remove-Item $dir -Recurse -Force }
     Expand-Archive -Path $zip -DestinationPath $dir -Force
+
     $allureBat = Join-Path $dir "allure-$ver\bin\allure.bat"
     if (!(Test-Path $allureBat)) { throw "Allure not found at $allureBat" }
+
     Write-Host "##vso[task.setvariable variable=ALLURE_BAT]$allureBat"
     & $allureBat --version
   displayName: "Download Allure CLI (portable)"
@@ -51,68 +86,91 @@ steps:
 
 - powershell: |
     $ErrorActionPreference = "Stop"
-    if (!(Test-Path "allure-results")) { throw "allure-results folder not found" }
     $allureBat = "$(ALLURE_BAT)"
     if ([string]::IsNullOrWhiteSpace($allureBat) -or !(Test-Path $allureBat)) {
       throw "ALLURE_BAT not set / not found: $allureBat"
     }
-    & $allureBat generate "allure-results" -o "allure-report" --clean
-    if (!(Test-Path "allure-report\index.html")) { throw "Allure report not generated (index.html missing)" }
-    Write-Host "Allure HTML generated at: $(Get-Location)\allure-report"
+
+    & $allureBat generate "$(ALLURE_RESULTS)" -o "$(ALLURE_REPORT)" --clean
+
+    if (!(Test-Path "$(ALLURE_REPORT)\index.html")) { throw "Allure report not generated (index.html missing)" }
+    Write-Host "Allure HTML generated at: $(ALLURE_REPORT)"
   displayName: "Generate Allure HTML report"
   condition: always()
+
+# -------------------------
+# Deploy Allure report to Azure Static Web Apps (ONE-CLICK URL)
+# -------------------------
+- task: AzureStaticWebApp@0
+  displayName: "Deploy Allure report to Azure Static Web App"
+  inputs:
+    app_location: "allure-report"
+    output_location: ""
+    skip_app_build: true
+    azure_static_web_apps_api_token: "$(AZURE_STATIC_WEB_APPS_API_TOKEN)"
+  condition: always()
+
+# -------------------------
+# Publish artifacts (optional but good)
+# -------------------------
 - task: PublishPipelineArtifact@1
   displayName: "Publish Allure HTML report (artifact)"
   inputs:
-    targetPath: "allure-report"
+    targetPath: "$(ALLURE_REPORT)"
     artifactName: "allure-report"
   condition: always()
 
-# Optional: also publish raw allure-results (helpful for debugging/re-generation)
 - task: PublishPipelineArtifact@1
   displayName: "Publish Allure results (raw)"
   inputs:
-    targetPath: "allure-results"
+    targetPath: "$(ALLURE_RESULTS)"
     artifactName: "allure-results"
   condition: always()
 
-# Optional: publish JUnit xml too
 - task: PublishPipelineArtifact@1
   displayName: "Publish Pytest JUnit XML"
   inputs:
-    targetPath: "pytest-junit.xml"
+    targetPath: "$(JUNIT_XML)"
     artifactName: "pytest-junit.xml"
   condition: always()
-  
+
 # -------------------------
-# Email notification (includes artifact link)
+# Email notification (includes one-click Static Web App link)
 # -------------------------
 - powershell: |
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
     $smtpServer = "smtp.gmail.com"
     $smtpPort   = 587
     $smtpUser   = "$(SMTP_USER)"
     $smtpPass   = "$(SMTP_PASSWORD)"
+
     if ([string]::IsNullOrWhiteSpace($smtpUser)) { throw "SMTP_USER is empty." }
     if ([string]::IsNullOrWhiteSpace($smtpPass)) { throw "SMTP_PASSWORD is empty (secret var). Use Gmail App Password." }
+
     $from = $smtpUser
     $to   = @("qa1@gmail.com","qa2@gmail.com")
+
     $status = $env:AGENT_JOBSTATUS
     if ([string]::IsNullOrWhiteSpace($status)) { $status = "Unknown" }
-    # -------- JUnit summary (from pytest-junit.xml) ----------
-    $junitPath = Join-Path $env:SYSTEM_DEFAULTWORKINGDIRECTORY "pytest-junit.xml"
+
+    # -------- JUnit summary ----------
+    $junitPath = "$(JUNIT_XML)"
     $tests = $passed = $failures = $errors = $skipped = 0
     $failedNames = @()
+
     if (Test-Path $junitPath) {
       [xml]$j = Get-Content $junitPath
       $suiteNodes = @()
       if ($j.testsuite) { $suiteNodes = @($j.testsuite) }
       elseif ($j.testsuites -and $j.testsuites.testsuite) { $suiteNodes = @($j.testsuites.testsuite) }
+
       foreach ($s in $suiteNodes) {
         $tests    += [int]$s.tests
         $failures += [int]$s.failures
         $errors   += [int]$s.errors
         $skipped  += [int]$s.skipped
+
         if ($s.testcase) {
           foreach ($tc in $s.testcase) {
             if ($tc.failure -or $tc.error) {
@@ -123,15 +181,21 @@ steps:
           }
         }
       }
+
       $passed = $tests - $failures - $errors - $skipped
       if ($passed -lt 0) { $passed = 0 }
       $failedNames = $failedNames | Select-Object -First 10
     } else {
       $failedNames = @("JUnit report not found at: $junitPath")
     }
-    # Links
+
     $buildLink = "$env:SYSTEM_TEAMFOUNDATIONCOLLECTIONURI$env:SYSTEM_TEAMPROJECT/_build/results?buildId=$env:BUILD_BUILDID"
     $artifactLink = "$env:SYSTEM_TEAMFOUNDATIONCOLLECTIONURI$env:SYSTEM_TEAMPROJECT/_build/results?buildId=$env:BUILD_BUILDID&view=artifacts&type=publishedArtifacts"
+
+    # Your live one-click report URL (set in DevOps variable ALLURE_SWA_URL)
+    $liveAllureUrl = "$(ALLURE_SWA_URL)"
+    if ([string]::IsNullOrWhiteSpace($liveAllureUrl)) { $liveAllureUrl = "ALLURE_SWA_URL not set" }
+
     $lines = @(
       "Hello Team,",
       "",
@@ -149,6 +213,7 @@ steps:
       "Skipped : $skipped",
       ""
     )
+
     if ($failedNames.Count -gt 0 -and $failedNames[0] -notlike "JUnit report not found*") {
       $lines += "Top Failures (up to 10):"
       foreach ($f in $failedNames) { $lines += " - $f" }
@@ -158,8 +223,12 @@ steps:
       foreach ($f in $failedNames) { $lines += " - $f" }
       $lines += ""
     }
+
     $lines += @(
-      "Allure HTML Report (Artifact):",
+      "Allure Report (One-click):",
+      $liveAllureUrl,
+      "",
+      "Allure HTML Report (Artifact backup):",
       $artifactLink,
       "",
       "Build Link:",
@@ -168,9 +237,12 @@ steps:
       "Regards,",
       "Azure DevOps CI"
     )
+
     $body = $lines -join "`r`n"
+
     $securePass = ConvertTo-SecureString $smtpPass -AsPlainText -Force
     $cred = New-Object System.Management.Automation.PSCredential ($smtpUser, $securePass)
+
     Send-MailMessage `
       -From $from `
       -To $to `
