@@ -3,271 +3,266 @@ trigger:
     include:
       - azure-pipelines-artifact
 
-pool:
-  name: local-docker-agent
-  demands:
-    - Agent.Name -equals local-docker-01
-
 variables:
   ALLURE_RESULTS: '$(Build.SourcesDirectory)\allure-results'
   ALLURE_REPORT:  '$(Build.SourcesDirectory)\allure-report'
   JUNIT_XML:      '$(Build.SourcesDirectory)\pytest-junit.xml'
 
-steps:
-- checkout: self
-
-- script: |
-    echo Checking Python installation
-    python --version
-    pip --version
-  displayName: "Verify Python"
-
-- script: |
-    python -m pip install --upgrade pip
-    pip install -r requirements.txt
-    pip install pytest allure-pytest
-  displayName: "Install test dependencies"
-
-# Ensure bash exists (AzureStaticWebApp task needs bash on Windows)
-- powershell: |
-    $ErrorActionPreference = "Stop"
-    $bash = "C:\Program Files\Git\bin\bash.exe"
-    if (!(Test-Path $bash)) { throw "bash not found at $bash. Install Git for Windows on this agent." }
-    Write-Host "##vso[task.prependpath]C:\Program Files\Git\bin"
-    & $bash --version
-  displayName: "Ensure bash is available (Git Bash)"
-  condition: always()
-
-# Ensure Node exists (AzureStaticWebApp task commonly depends on Node)
-- task: NodeTool@0
-  displayName: "Use Node.js 18.x (for SWA deploy)"
-  inputs:
-    versionSpec: "18.x"
-  condition: always()
-
-# Clean outputs each run
-- powershell: |
-    $ErrorActionPreference = "Stop"
-    if (Test-Path "$(ALLURE_RESULTS)") { Remove-Item "$(ALLURE_RESULTS)" -Recurse -Force }
-    if (Test-Path "$(ALLURE_REPORT)")  { Remove-Item "$(ALLURE_REPORT)"  -Recurse -Force }
-    if (Test-Path "$(JUNIT_XML)")      { Remove-Item "$(JUNIT_XML)" -Force }
-    New-Item -ItemType Directory -Path "$(ALLURE_RESULTS)" | Out-Null
-    Write-Host "Prepared folders."
-  displayName: "Prep output folders"
-  condition: always()
-
-# Run tests (keep your interactive start/wait, but force working dir + absolute output paths)
-- script: |
-    echo Running test in interactive desktop
-    cmd /c "start /wait /D "$(Build.SourcesDirectory)" pytest ./tests/wja/poc --alluredir="$(ALLURE_RESULTS)" --clean-alluredir --junitxml="$(JUNIT_XML)" -p no:xdist -p no:rerunfailures"
-  displayName: "Run POC UI test cases (foreground)"
-  condition: always()
-
-# Verify allure-results has json
-- powershell: |
-    $ErrorActionPreference = "Stop"
-    if (!(Test-Path "$(ALLURE_RESULTS)")) { throw "Allure results folder not found: $(ALLURE_RESULTS)" }
-    $json = Get-ChildItem -Path "$(ALLURE_RESULTS)" -Filter *.json -File -ErrorAction SilentlyContinue
-    Write-Host "Allure JSON files: $($json.Count)"
-    if ($json.Count -eq 0) {
-      Get-ChildItem "$(ALLURE_RESULTS)" | Select-Object -First 50 | ForEach-Object { Write-Host $_.Name }
-      throw "No Allure JSON files found. Report will be empty."
-    }
-  displayName: "Verify Allure results not empty"
-  condition: always()
-
+jobs:
 # -------------------------
-# Allure CLI (portable), generate HTML report
+# JOB 1: Windows self-hosted agent (UI tests + Allure HTML + publish artifacts + email)
 # -------------------------
-- powershell: |
-    $ErrorActionPreference = "Stop"
-    $ver = "2.27.0"
-    $url = "https://github.com/allure-framework/allure2/releases/download/$ver/allure-$ver.zip"
-    $zip = "$(Pipeline.Workspace)\allure-$ver.zip"
-    $dir = "$(Pipeline.Workspace)\allure-$ver"
+- job: BuildAndTest
+  displayName: "Build + Test + Generate Allure"
+  pool:
+    name: local-docker-agent
+    demands:
+      - Agent.Name -equals local-docker-01
 
-    Write-Host "Downloading Allure CLI $ver..."
-    Invoke-WebRequest -Uri $url -OutFile $zip
-    if (Test-Path $dir) { Remove-Item $dir -Recurse -Force }
-    Expand-Archive -Path $zip -DestinationPath $dir -Force
+  steps:
+  - checkout: self
 
-    $allureBat = Join-Path $dir "allure-$ver\bin\allure.bat"
-    if (!(Test-Path $allureBat)) { throw "Allure not found at $allureBat" }
+  - script: |
+      echo Checking Python installation
+      python --version
+      pip --version
+    displayName: "Verify Python"
 
-    Write-Host "##vso[task.setvariable variable=ALLURE_BAT]$allureBat"
-    & $allureBat --version
-  displayName: "Download Allure CLI (portable)"
-  condition: always()
+  - script: |
+      python -m pip install --upgrade pip
+      pip install -r requirements.txt
+      pip install pytest allure-pytest
+    displayName: "Install test dependencies"
 
-- powershell: |
-    $ErrorActionPreference = "Stop"
-    $allureBat = "$(ALLURE_BAT)"
-    if ([string]::IsNullOrWhiteSpace($allureBat) -or !(Test-Path $allureBat)) {
-      throw "ALLURE_BAT not set / not found: $allureBat"
-    }
+  # Clean outputs each run
+  - powershell: |
+      $ErrorActionPreference = "Stop"
+      if (Test-Path "$(ALLURE_RESULTS)") { Remove-Item "$(ALLURE_RESULTS)" -Recurse -Force }
+      if (Test-Path "$(ALLURE_REPORT)")  { Remove-Item "$(ALLURE_REPORT)"  -Recurse -Force }
+      if (Test-Path "$(JUNIT_XML)")      { Remove-Item "$(JUNIT_XML)" -Force }
+      New-Item -ItemType Directory -Path "$(ALLURE_RESULTS)" | Out-Null
+      Write-Host "Prepared folders."
+    displayName: "Prep output folders"
+    condition: always()
 
-    & $allureBat generate "$(ALLURE_RESULTS)" -o "$(ALLURE_REPORT)" --clean
+  # Run tests (interactive)
+  - script: |
+      echo Running test in interactive desktop
+      cmd /c "start /wait /D "$(Build.SourcesDirectory)" pytest ./tests/wja/poc --alluredir="$(ALLURE_RESULTS)" --clean-alluredir --junitxml="$(JUNIT_XML)" -p no:xdist -p no:rerunfailures"
+    displayName: "Run POC UI test cases (foreground)"
+    condition: always()
 
-    if (!(Test-Path "$(ALLURE_REPORT)\index.html")) { throw "Allure report not generated (index.html missing)" }
-    Write-Host "Allure HTML generated at: $(ALLURE_REPORT)"
-  displayName: "Generate Allure HTML report"
-  condition: always()
+  # Verify allure-results has json
+  - powershell: |
+      $ErrorActionPreference = "Stop"
+      if (!(Test-Path "$(ALLURE_RESULTS)")) { throw "Allure results folder not found: $(ALLURE_RESULTS)" }
+      $json = Get-ChildItem -Path "$(ALLURE_RESULTS)" -Filter *.json -File -ErrorAction SilentlyContinue
+      Write-Host "Allure JSON files: $($json.Count)"
+      if ($json.Count -eq 0) {
+        Get-ChildItem "$(ALLURE_RESULTS)" | Select-Object -First 50 | ForEach-Object { Write-Host $_.Name }
+        throw "No Allure JSON files found. Report will be empty."
+      }
+    displayName: "Verify Allure results not empty"
+    condition: always()
 
-# -------------------------
-# Deploy Allure report to Azure Static Web Apps
-# -------------------------
-- task: AzureStaticWebApp@0
-  displayName: "Deploy Allure report to Azure Static Web App"
-  inputs:
-    app_location: "allure-report"
-    output_location: ""
-    skip_app_build: true
-    azure_static_web_apps_api_token: "$(AZURE_STATIC_WEB_APPS_API_TOKEN)"
-  condition: always()
+  # -------------------------
+  # Allure CLI (portable), generate HTML report
+  # -------------------------
+  - powershell: |
+      $ErrorActionPreference = "Stop"
+      $ver = "2.27.0"
+      $url = "https://github.com/allure-framework/allure2/releases/download/$ver/allure-$ver.zip"
+      $zip = "$(Pipeline.Workspace)\allure-$ver.zip"
+      $dir = "$(Pipeline.Workspace)\allure-$ver"
 
-# -------------------------
-# Publish artifacts (optional but good)
-# -------------------------
-- task: PublishPipelineArtifact@1
-  displayName: "Publish Allure HTML report (artifact)"
-  inputs:
-    targetPath: "$(ALLURE_REPORT)"
-    artifactName: "allure-report"
-  condition: always()
+      Write-Host "Downloading Allure CLI $ver..."
+      Invoke-WebRequest -Uri $url -OutFile $zip
+      if (Test-Path $dir) { Remove-Item $dir -Recurse -Force }
+      Expand-Archive -Path $zip -DestinationPath $dir -Force
 
-- task: PublishPipelineArtifact@1
-  displayName: "Publish Allure results (raw)"
-  inputs:
-    targetPath: "$(ALLURE_RESULTS)"
-    artifactName: "allure-results"
-  condition: always()
+      $allureBat = Join-Path $dir "allure-$ver\bin\allure.bat"
+      if (!(Test-Path $allureBat)) { throw "Allure not found at $allureBat" }
 
-- task: PublishPipelineArtifact@1
-  displayName: "Publish Pytest JUnit XML"
-  inputs:
-    targetPath: "$(JUNIT_XML)"
-    artifactName: "pytest-junit.xml"
-  condition: always()
+      Write-Host "##vso[task.setvariable variable=ALLURE_BAT]$allureBat"
+      & $allureBat --version
+    displayName: "Download Allure CLI (portable)"
+    condition: always()
 
-# -------------------------
-# Email notification (includes one-click Static Web App link)
-# -------------------------
-- powershell: |
-    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+  - powershell: |
+      $ErrorActionPreference = "Stop"
+      $allureBat = "$(ALLURE_BAT)"
+      if ([string]::IsNullOrWhiteSpace($allureBat) -or !(Test-Path $allureBat)) {
+        throw "ALLURE_BAT not set / not found: $allureBat"
+      }
 
-    $smtpServer = "smtp.gmail.com"
-    $smtpPort   = 587
-    $smtpUser   = "$(SMTP_USER)"
-    $smtpPass   = "$(SMTP_PASSWORD)"
+      & $allureBat generate "$(ALLURE_RESULTS)" -o "$(ALLURE_REPORT)" --clean
 
-    if ([string]::IsNullOrWhiteSpace($smtpUser)) { throw "SMTP_USER is empty." }
-    if ([string]::IsNullOrWhiteSpace($smtpPass)) { throw "SMTP_PASSWORD is empty (secret var). Use Gmail App Password." }
+      if (!(Test-Path "$(ALLURE_REPORT)\index.html")) { throw "Allure report not generated (index.html missing)" }
+      Write-Host "Allure HTML generated at: $(ALLURE_REPORT)"
+    displayName: "Generate Allure HTML report"
+    condition: always()
 
-    $from = $smtpUser
-    $to   = @("qa1@gmail.com","qa2@gmail.com")
+  # Publish artifacts (Job 2 will deploy using allure-report artifact)
+  - task: PublishPipelineArtifact@1
+    displayName: "Publish Allure HTML report (artifact)"
+    inputs:
+      targetPath: "$(ALLURE_REPORT)"
+      artifactName: "allure-report"
+    condition: always()
 
-    $status = $env:AGENT_JOBSTATUS
-    if ([string]::IsNullOrWhiteSpace($status)) { $status = "Unknown" }
+  - task: PublishPipelineArtifact@1
+    displayName: "Publish Allure results (raw)"
+    inputs:
+      targetPath: "$(ALLURE_RESULTS)"
+      artifactName: "allure-results"
+    condition: always()
 
-    # JUnit summary
-    $junitPath = "$(JUNIT_XML)"
-    $tests = $passed = $failures = $errors = $skipped = 0
-    $failedNames = @()
+  - task: PublishPipelineArtifact@1
+    displayName: "Publish Pytest JUnit XML"
+    inputs:
+      targetPath: "$(JUNIT_XML)"
+      artifactName: "pytest-junit.xml"
+    condition: always()
 
-    if (Test-Path $junitPath) {
-      [xml]$j = Get-Content $junitPath
-      $suiteNodes = @()
-      if ($j.testsuite) { $suiteNodes = @($j.testsuite) }
-      elseif ($j.testsuites -and $j.testsuites.testsuite) { $suiteNodes = @($j.testsuites.testsuite) }
+  # Email notification (includes SWA URL + artifact backup link)
+  - powershell: |
+      [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-      foreach ($s in $suiteNodes) {
-        $tests    += [int]$s.tests
-        $failures += [int]$s.failures
-        $errors   += [int]$s.errors
-        $skipped  += [int]$s.skipped
+      $smtpServer = "smtp.gmail.com"
+      $smtpPort   = 587
+      $smtpUser   = "$(SMTP_USER)"
+      $smtpPass   = "$(SMTP_PASSWORD)"
 
-        if ($s.testcase) {
-          foreach ($tc in $s.testcase) {
-            if ($tc.failure -or $tc.error) {
-              $name = $tc.name
-              if ($tc.classname) { $name = "$($tc.classname)::$($tc.name)" }
-              $failedNames += $name
+      if ([string]::IsNullOrWhiteSpace($smtpUser)) { throw "SMTP_USER is empty." }
+      if ([string]::IsNullOrWhiteSpace($smtpPass)) { throw "SMTP_PASSWORD is empty (secret var). Use Gmail App Password." }
+
+      $from = $smtpUser
+      $to   = @("qa1@gmail.com","qa2@gmail.com")
+
+      $status = $env:AGENT_JOBSTATUS
+      if ([string]::IsNullOrWhiteSpace($status)) { $status = "Unknown" }
+
+      # JUnit summary
+      $junitPath = "$(JUNIT_XML)"
+      $tests = $passed = $failures = $errors = $skipped = 0
+      $failedNames = @()
+
+      if (Test-Path $junitPath) {
+        [xml]$j = Get-Content $junitPath
+        $suiteNodes = @()
+        if ($j.testsuite) { $suiteNodes = @($j.testsuite) }
+        elseif ($j.testsuites -and $j.testsuites.testsuite) { $suiteNodes = @($j.testsuites.testsuite) }
+
+        foreach ($s in $suiteNodes) {
+          $tests    += [int]$s.tests
+          $failures += [int]$s.failures
+          $errors   += [int]$s.errors
+          $skipped  += [int]$s.skipped
+
+          if ($s.testcase) {
+            foreach ($tc in $s.testcase) {
+              if ($tc.failure -or $tc.error) {
+                $name = $tc.name
+                if ($tc.classname) { $name = "$($tc.classname)::$($tc.name)" }
+                $failedNames += $name
+              }
             }
           }
         }
+
+        $passed = $tests - $failures - $errors - $skipped
+        if ($passed -lt 0) { $passed = 0 }
+        $failedNames = $failedNames | Select-Object -First 10
+      } else {
+        $failedNames = @("JUnit report not found at: $junitPath")
       }
 
-      $passed = $tests - $failures - $errors - $skipped
-      if ($passed -lt 0) { $passed = 0 }
-      $failedNames = $failedNames | Select-Object -First 10
-    } else {
-      $failedNames = @("JUnit report not found at: $junitPath")
-    }
+      $buildLink = "$env:SYSTEM_TEAMFOUNDATIONCOLLECTIONURI$env:SYSTEM_TEAMPROJECT/_build/results?buildId=$env:BUILD_BUILDID"
+      $artifactLink = "$env:SYSTEM_TEAMFOUNDATIONCOLLECTIONURI$env:SYSTEM_TEAMPROJECT/_build/results?buildId=$env:BUILD_BUILDID&view=artifacts&type=publishedArtifacts"
 
-    $buildLink = "$env:SYSTEM_TEAMFOUNDATIONCOLLECTIONURI$env:SYSTEM_TEAMPROJECT/_build/results?buildId=$env:BUILD_BUILDID"
-    $artifactLink = "$env:SYSTEM_TEAMFOUNDATIONCOLLECTIONURI$env:SYSTEM_TEAMPROJECT/_build/results?buildId=$env:BUILD_BUILDID&view=artifacts&type=publishedArtifacts"
+      $liveAllureUrl = $env:ALLURE_SWA_URL
+      if ([string]::IsNullOrWhiteSpace($liveAllureUrl)) { $liveAllureUrl = "ALLURE_SWA_URL not set (add pipeline variable)" }
 
-    # LIVE URL passed via env (never crashes if pipeline var missing)
-    $liveAllureUrl = $env:ALLURE_SWA_URL
-    if ([string]::IsNullOrWhiteSpace($liveAllureUrl)) { $liveAllureUrl = "ALLURE_SWA_URL not set (add pipeline variable)" }
+      $lines = @(
+        "Hello Team,",
+        "",
+        "POC UI Test execution is completed.",
+        "",
+        "Status   : $status",
+        "Pipeline : $env:BUILD_DEFINITIONNAME",
+        "Build #  : $env:BUILD_BUILDNUMBER",
+        "",
+        "Test Summary (Pytest):",
+        "Total   : $tests",
+        "Passed  : $passed",
+        "Failed  : $failures",
+        "Errors  : $errors",
+        "Skipped : $skipped",
+        ""
+      )
 
-    $lines = @(
-      "Hello Team,",
-      "",
-      "POC UI Test execution is completed.",
-      "",
-      "Status   : $status",
-      "Pipeline : $env:BUILD_DEFINITIONNAME",
-      "Build #  : $env:BUILD_BUILDNUMBER",
-      "",
-      "Test Summary (Pytest):",
-      "Total   : $tests",
-      "Passed  : $passed",
-      "Failed  : $failures",
-      "Errors  : $errors",
-      "Skipped : $skipped",
-      ""
-    )
+      if ($failedNames.Count -gt 0 -and $failedNames[0] -notlike "JUnit report not found*") {
+        $lines += "Top Failures (up to 10):"
+        foreach ($f in $failedNames) { $lines += " - $f" }
+        $lines += ""
+      } elseif ($failedNames.Count -gt 0) {
+        $lines += "Note:"
+        foreach ($f in $failedNames) { $lines += " - $f" }
+        $lines += ""
+      }
 
-    if ($failedNames.Count -gt 0 -and $failedNames[0] -notlike "JUnit report not found*") {
-      $lines += "Top Failures (up to 10):"
-      foreach ($f in $failedNames) { $lines += " - $f" }
-      $lines += ""
-    } elseif ($failedNames.Count -gt 0) {
-      $lines += "Note:"
-      foreach ($f in $failedNames) { $lines += " - $f" }
-      $lines += ""
-    }
+      $lines += @(
+        "Allure Report (One-click):",
+        $liveAllureUrl,
+        "",
+        "Allure HTML Report (Artifact backup):",
+        $artifactLink,
+        "",
+        "Build Link:",
+        $buildLink,
+        "",
+        "Regards,",
+        "Azure DevOps CI"
+      )
 
-    $lines += @(
-      "Allure Report (One-click):",
-      $liveAllureUrl,
-      "",
-      "Allure HTML Report (Artifact backup):",
-      $artifactLink,
-      "",
-      "Build Link:",
-      $buildLink,
-      "",
-      "Regards,",
-      "Azure DevOps CI"
-    )
+      $body = $lines -join "`r`n"
 
-    $body = $lines -join "`r`n"
+      $securePass = ConvertTo-SecureString $smtpPass -AsPlainText -Force
+      $cred = New-Object System.Management.Automation.PSCredential ($smtpUser, $securePass)
 
-    $securePass = ConvertTo-SecureString $smtpPass -AsPlainText -Force
-    $cred = New-Object System.Management.Automation.PSCredential ($smtpUser, $securePass)
+      Send-MailMessage `
+        -From $from `
+        -To $to `
+        -Subject "POC UI Tests - $status | Build $env:BUILD_BUILDNUMBER" `
+        -Body $body `
+        -SmtpServer $smtpServer `
+        -Port $smtpPort `
+        -UseSsl `
+        -Credential $cred
+    displayName: "Send Email Notification"
+    condition: always()
+    env:
+      ALLURE_SWA_URL: $(ALLURE_SWA_URL)
 
-    Send-MailMessage `
-      -From $from `
-      -To $to `
-      -Subject "POC UI Tests - $status | Build $env:BUILD_BUILDNUMBER" `
-      -Body $body `
-      -SmtpServer $smtpServer `
-      -Port $smtpPort `
-      -UseSsl `
-      -Credential $cred
-  displayName: "Send Email Notification"
+# -------------------------
+# JOB 2: Hosted Ubuntu agent (deploy artifact to SWA; Docker is available here)
+# -------------------------
+- job: DeployToSWA
+  displayName: "Deploy Allure Report to Static Web App"
+  dependsOn: BuildAndTest
   condition: always()
-  env:
-    ALLURE_SWA_URL: $(ALLURE_SWA_URL)
+
+  pool:
+    vmImage: ubuntu-latest
+
+  steps:
+  - download: current
+    artifact: allure-report
+
+  - task: AzureStaticWebApp@0
+    displayName: "Deploy Allure report"
+    inputs:
+      app_location: "$(Pipeline.Workspace)/allure-report"
+      output_location: ""
+      skip_app_build: true
+      azure_static_web_apps_api_token: "$(AZURE_STATIC_WEB_APPS_API_TOKEN)"
