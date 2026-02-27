@@ -251,18 +251,36 @@ jobs:
   displayName: "Deploy Allure Report to Static Web App"
   dependsOn: BuildAndTest
   condition: always()
-
   pool:
     vmImage: ubuntu-latest
 
   steps:
+  - checkout: self
+
   - download: current
     artifact: allure-report
+
+  # Copy the downloaded artifact into the repo folder so SWA task can deploy reliably
+  - bash: |
+      set -e
+      echo "Workspace: $PIPELINE_WORKSPACE"
+      echo "Sources:   $BUILD_SOURCESDIRECTORY"
+
+      echo "Listing downloaded artifact:"
+      ls -la "$PIPELINE_WORKSPACE/allure-report" | head -n 50
+
+      mkdir -p "$BUILD_SOURCESDIRECTORY/allure-report"
+      cp -R "$PIPELINE_WORKSPACE/allure-report/." "$BUILD_SOURCESDIRECTORY/allure-report/"
+
+      echo "Verify index.html exists:"
+      test -f "$BUILD_SOURCESDIRECTORY/allure-report/index.html"
+      echo "✅ index.html found"
+    displayName: "Prepare Allure site folder"
 
   - task: AzureStaticWebApp@0
     displayName: "Deploy Allure report"
     inputs:
-      app_location: "$(Pipeline.Workspace)/allure-report"
+      app_location: "allure-report"
       output_location: ""
       skip_app_build: true
       azure_static_web_apps_api_token: "$(AZURE_STATIC_WEB_APPS_API_TOKEN)"
