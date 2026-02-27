@@ -10,7 +10,7 @@ variables:
 
 jobs:
 # -------------------------
-# JOB 1: Windows self-hosted agent (UI tests + Allure HTML + publish artifacts + email)
+# JOB 1: Windows self-hosted agent (UI tests + Allure HTML + publish artifacts)
 # -------------------------
 - job: BuildAndTest
   displayName: "Build + Test + Generate Allure"
@@ -124,26 +124,74 @@ jobs:
       artifactName: "pytest-junit.xml"
     condition: always()
 
-  # Email notification (includes SWA URL + artifact backup link)
-  - powershell: |
-      [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
+# -------------------------
+# JOB 2: Hosted Ubuntu agent (deploy artifact to SWA; then send email)
+# -------------------------
+- job: DeployToSWA
+  displayName: "Deploy Allure to SWA + Send Email"
+  dependsOn: BuildAndTest
+  condition: always()
+  pool:
+    vmImage: ubuntu-latest
+
+  steps:
+  - checkout: self
+
+  - download: current
+    artifact: allure-report
+
+  - download: current
+    artifact: pytest-junit.xml
+
+  # Prepare folder for SWA deploy
+  - bash: |
+      set -e
+      echo "PIPELINE_WORKSPACE=$PIPELINE_WORKSPACE"
+      echo "BUILD_SOURCESDIRECTORY=$BUILD_SOURCESDIRECTORY"
+
+      echo "Listing downloaded allure-report artifact:"
+      ls -la "$PIPELINE_WORKSPACE/allure-report" | head -n 80
+
+      mkdir -p "$BUILD_SOURCESDIRECTORY/allure-report"
+      cp -R "$PIPELINE_WORKSPACE/allure-report/." "$BUILD_SOURCESDIRECTORY/allure-report/"
+
+      echo "Verify index.html exists:"
+      test -f "$BUILD_SOURCESDIRECTORY/allure-report/index.html"
+      echo "✅ index.html found"
+    displayName: "Prepare Allure site folder"
+
+  # Deploy to Azure Static Web Apps
+  - task: AzureStaticWebApp@0
+    displayName: "Deploy Allure report to Azure Static Web App"
+    inputs:
+      app_location: "allure-report"
+      output_location: ""
+      skip_app_build: true
+      azure_static_web_apps_api_token: "$(AZURE_STATIC_WEB_APPS_API_TOKEN)"
+
+  # Send Email AFTER deploy (so link is live)
+  - powershell: |
+      $ErrorActionPreference = "Stop"
+
+      [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
       $smtpServer = "smtp.gmail.com"
       $smtpPort   = 587
       $smtpUser   = "$(SMTP_USER)"
       $smtpPass   = "$(SMTP_PASSWORD)"
 
       if ([string]::IsNullOrWhiteSpace($smtpUser)) { throw "SMTP_USER is empty." }
-      if ([string]::IsNullOrWhiteSpace($smtpPass)) { throw "SMTP_PASSWORD is empty (secret var). Use Gmail App Password." }
+      if ([string]::IsNullOrWhiteSpace($smtpPass)) { throw "SMTP_PASSWORD is empty (secret var)." }
 
       $from = $smtpUser
       $to   = @("qa1@gmail.com","qa2@gmail.com")
 
+      # Job status (Ubuntu job)
       $status = $env:AGENT_JOBSTATUS
       if ([string]::IsNullOrWhiteSpace($status)) { $status = "Unknown" }
 
-      # JUnit summary
-      $junitPath = "$(JUNIT_XML)"
+      # -------- JUnit summary (downloaded artifact) ----------
+      $junitPath = "$(Pipeline.Workspace)/pytest-junit.xml/pytest-junit.xml"
       $tests = $passed = $failures = $errors = $skipped = 0
       $failedNames = @()
 
@@ -177,6 +225,7 @@ jobs:
         $failedNames = @("JUnit report not found at: $junitPath")
       }
 
+      # Links
       $buildLink = "$env:SYSTEM_TEAMFOUNDATIONCOLLECTIONURI$env:SYSTEM_TEAMPROJECT/_build/results?buildId=$env:BUILD_BUILDID"
       $artifactLink = "$env:SYSTEM_TEAMFOUNDATIONCOLLECTIONURI$env:SYSTEM_TEAMPROJECT/_build/results?buildId=$env:BUILD_BUILDID&view=artifacts&type=publishedArtifacts"
 
@@ -186,7 +235,7 @@ jobs:
       $lines = @(
         "Hello Team,",
         "",
-        "POC UI Test execution is completed.",
+        "POC UI Test execution is completed and Allure report is deployed.",
         "",
         "Status   : $status",
         "Pipeline : $env:BUILD_DEFINITIONNAME",
@@ -239,48 +288,7 @@ jobs:
         -Port $smtpPort `
         -UseSsl `
         -Credential $cred
-    displayName: "Send Email Notification"
+    displayName: "Send Email Notification (after SWA deploy)"
     condition: always()
     env:
       ALLURE_SWA_URL: $(ALLURE_SWA_URL)
-
-# -------------------------
-# JOB 2: Hosted Ubuntu agent (deploy artifact to SWA; Docker is available here)
-# -------------------------
-- job: DeployToSWA
-  displayName: "Deploy Allure Report to Static Web App"
-  dependsOn: BuildAndTest
-  condition: always()
-  pool:
-    vmImage: ubuntu-latest
-
-  steps:
-  - checkout: self
-
-  - download: current
-    artifact: allure-report
-
-  # Copy the downloaded artifact into the repo folder so SWA task can deploy reliably
-  - bash: |
-      set -e
-      echo "Workspace: $PIPELINE_WORKSPACE"
-      echo "Sources:   $BUILD_SOURCESDIRECTORY"
-
-      echo "Listing downloaded artifact:"
-      ls -la "$PIPELINE_WORKSPACE/allure-report" | head -n 50
-
-      mkdir -p "$BUILD_SOURCESDIRECTORY/allure-report"
-      cp -R "$PIPELINE_WORKSPACE/allure-report/." "$BUILD_SOURCESDIRECTORY/allure-report/"
-
-      echo "Verify index.html exists:"
-      test -f "$BUILD_SOURCESDIRECTORY/allure-report/index.html"
-      echo "✅ index.html found"
-    displayName: "Prepare Allure site folder"
-
-  - task: AzureStaticWebApp@0
-    displayName: "Deploy Allure report"
-    inputs:
-      app_location: "allure-report"
-      output_location: ""
-      skip_app_build: true
-      azure_static_web_apps_api_token: "$(AZURE_STATIC_WEB_APPS_API_TOKEN)"
