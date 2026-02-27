@@ -28,7 +28,24 @@ steps:
     pip install pytest allure-pytest
   displayName: "Install test dependencies"
 
-# Clean outputs each run (prevents mixing old+new)
+# Ensure bash exists (AzureStaticWebApp task needs bash on Windows)
+- powershell: |
+    $ErrorActionPreference = "Stop"
+    $bash = "C:\Program Files\Git\bin\bash.exe"
+    if (!(Test-Path $bash)) { throw "bash not found at $bash. Install Git for Windows on this agent." }
+    Write-Host "##vso[task.prependpath]C:\Program Files\Git\bin"
+    & $bash --version
+  displayName: "Ensure bash is available (Git Bash)"
+  condition: always()
+
+# Ensure Node exists (AzureStaticWebApp task commonly depends on Node)
+- task: NodeTool@0
+  displayName: "Use Node.js 18.x (for SWA deploy)"
+  inputs:
+    versionSpec: "18.x"
+  condition: always()
+
+# Clean outputs each run
 - powershell: |
     $ErrorActionPreference = "Stop"
     if (Test-Path "$(ALLURE_RESULTS)") { Remove-Item "$(ALLURE_RESULTS)" -Recurse -Force }
@@ -39,15 +56,14 @@ steps:
   displayName: "Prep output folders"
   condition: always()
 
-# IMPORTANT:
-# start /wait can change the working directory, so we force /D and absolute paths.
+# Run tests (keep your interactive start/wait, but force working dir + absolute output paths)
 - script: |
     echo Running test in interactive desktop
     cmd /c "start /wait /D "$(Build.SourcesDirectory)" pytest ./tests/wja/poc --alluredir="$(ALLURE_RESULTS)" --clean-alluredir --junitxml="$(JUNIT_XML)" -p no:xdist -p no:rerunfailures"
   displayName: "Run POC UI test cases (foreground)"
   condition: always()
 
-# Sanity check: if no json files, Allure HTML will look empty
+# Verify allure-results has json
 - powershell: |
     $ErrorActionPreference = "Stop"
     if (!(Test-Path "$(ALLURE_RESULTS)")) { throw "Allure results folder not found: $(ALLURE_RESULTS)" }
@@ -98,7 +114,7 @@ steps:
   condition: always()
 
 # -------------------------
-# Deploy Allure report to Azure Static Web Apps (ONE-CLICK URL)
+# Deploy Allure report to Azure Static Web Apps
 # -------------------------
 - task: AzureStaticWebApp@0
   displayName: "Deploy Allure report to Azure Static Web App"
@@ -153,7 +169,7 @@ steps:
     $status = $env:AGENT_JOBSTATUS
     if ([string]::IsNullOrWhiteSpace($status)) { $status = "Unknown" }
 
-    # -------- JUnit summary ----------
+    # JUnit summary
     $junitPath = "$(JUNIT_XML)"
     $tests = $passed = $failures = $errors = $skipped = 0
     $failedNames = @()
@@ -191,9 +207,9 @@ steps:
     $buildLink = "$env:SYSTEM_TEAMFOUNDATIONCOLLECTIONURI$env:SYSTEM_TEAMPROJECT/_build/results?buildId=$env:BUILD_BUILDID"
     $artifactLink = "$env:SYSTEM_TEAMFOUNDATIONCOLLECTIONURI$env:SYSTEM_TEAMPROJECT/_build/results?buildId=$env:BUILD_BUILDID&view=artifacts&type=publishedArtifacts"
 
-    # Your live one-click report URL (set in DevOps variable ALLURE_SWA_URL)
-    $liveAllureUrl = "$(ALLURE_SWA_URL)"
-    if ([string]::IsNullOrWhiteSpace($liveAllureUrl)) { $liveAllureUrl = "ALLURE_SWA_URL not set" }
+    # LIVE URL passed via env (never crashes if pipeline var missing)
+    $liveAllureUrl = $env:ALLURE_SWA_URL
+    if ([string]::IsNullOrWhiteSpace($liveAllureUrl)) { $liveAllureUrl = "ALLURE_SWA_URL not set (add pipeline variable)" }
 
     $lines = @(
       "Hello Team,",
@@ -253,3 +269,5 @@ steps:
       -Credential $cred
   displayName: "Send Email Notification"
   condition: always()
+  env:
+    ALLURE_SWA_URL: $(ALLURE_SWA_URL)
