@@ -7,7 +7,7 @@ trigger:
 pool:
   name: local-docker-agent
   demands:
-    - Agent.Name -equals local-docker-02
+    - Agent.Name -equals local-docker-01
 
 steps:
 - checkout: self
