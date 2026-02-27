@@ -7,7 +7,7 @@ trigger:
 pool:
   name: local-docker-agent
   demands:
-    - Agent.Name -equals local-docker-02
+    - Agent.Name -equals local-docker-01
 
 steps:
 - checkout: self
@@ -30,7 +30,7 @@ steps:
   displayName: "Run POC UI test cases (foreground)"
 
 # -------------------------
-# Allure: download portable CLI (no Chocolatey), generate HTML report, publish artifact
+# Allure: download portable CLI 
 # -------------------------
 - powershell: |
     $ErrorActionPreference = "Stop"
