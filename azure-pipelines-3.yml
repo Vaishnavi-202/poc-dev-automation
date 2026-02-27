@@ -1,13 +1,12 @@
 trigger:
   branches:
     include:
-      - main
-      - POC_SMOKE
+      - azure-pipelines-artifact
 
 pool:
   name: local-docker-agent
   demands:
-    - Agent.Name -equals local-docker-02
+    - Agent.Name -equals local-docker-01
 
 variables:
   ALLURE_RESULTS: '$(Build.SourcesDirectory)\allure-results'
