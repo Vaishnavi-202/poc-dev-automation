@@ -126,7 +126,7 @@ jobs:
 
 
 # -------------------------
-# JOB 2: Hosted Ubuntu agent (deploy artifact to SWA; then send email)
+# JOB 2: Hosted Ubuntu agent (deploy artifact to SWA)
 # -------------------------
 - job: DeployToSWA
   displayName: "Deploy Allure to SWA + Send Email"
@@ -158,7 +158,7 @@ jobs:
 
       echo "Verify index.html exists:"
       test -f "$BUILD_SOURCESDIRECTORY/allure-report/index.html"
-      echo "✅ index.html found"
+      echo "index.html found"
     displayName: "Prepare Allure site folder"
 
   # Deploy to Azure Static Web Apps
@@ -170,7 +170,7 @@ jobs:
       skip_app_build: true
       azure_static_web_apps_api_token: "$(AZURE_STATIC_WEB_APPS_API_TOKEN)"
 
-  # Send Email AFTER deploy (so link is live)
+  # Send Email AFTER deploy
   - powershell: |
       $ErrorActionPreference = "Stop"
 
