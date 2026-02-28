@@ -34,7 +34,6 @@ jobs:
       pip install pytest allure-pytest
     displayName: "Install test dependencies"
 
-  # Clean outputs each run
   - powershell: |
       $ErrorActionPreference = "Stop"
       if (Test-Path "$(ALLURE_RESULTS)") { Remove-Item "$(ALLURE_RESULTS)" -Recurse -Force }
@@ -45,14 +44,12 @@ jobs:
     displayName: "Prep output folders"
     condition: always()
 
-  # Run tests (interactive)
   - script: |
       echo Running test in interactive desktop
       cmd /c "start /wait /D "$(Build.SourcesDirectory)" pytest ./tests/wja/poc --alluredir="$(ALLURE_RESULTS)" --clean-alluredir --junitxml="$(JUNIT_XML)" -p no:xdist -p no:rerunfailures"
     displayName: "Run POC UI test cases (foreground)"
     condition: always()
 
-  # Verify allure-results has json
   - powershell: |
       $ErrorActionPreference = "Stop"
       if (!(Test-Path "$(ALLURE_RESULTS)")) { throw "Allure results folder not found: $(ALLURE_RESULTS)" }
@@ -65,9 +62,6 @@ jobs:
     displayName: "Verify Allure results not empty"
     condition: always()
 
-  # -------------------------
-  # Allure CLI (portable), generate HTML report
-  # -------------------------
   - powershell: |
       $ErrorActionPreference = "Stop"
       $ver = "2.27.0"
@@ -102,7 +96,6 @@ jobs:
     displayName: "Generate Allure HTML report"
     condition: always()
 
-  # Publish artifacts (Job 2 will deploy using allure-report artifact)
   - task: PublishPipelineArtifact@1
     displayName: "Publish Allure HTML report (artifact)"
     inputs:
@@ -126,7 +119,7 @@ jobs:
 
 
 # -------------------------
-# JOB 2: Hosted Ubuntu agent (deploy artifact to SWA)
+# JOB 2: Hosted Ubuntu agent (deploy artifact to SWA + send email)
 # -------------------------
 - job: DeployToSWA
   displayName: "Deploy Allure to SWA + Send Email"
@@ -144,7 +137,6 @@ jobs:
   - download: current
     artifact: pytest-junit.xml
 
-  # Prepare folder for SWA deploy
   - bash: |
       set -e
       echo "PIPELINE_WORKSPACE=$PIPELINE_WORKSPACE"
@@ -158,10 +150,9 @@ jobs:
 
       echo "Verify index.html exists:"
       test -f "$BUILD_SOURCESDIRECTORY/allure-report/index.html"
-      echo "index.html found"
+      echo "✅ index.html found"
     displayName: "Prepare Allure site folder"
 
-  # Deploy to Azure Static Web Apps
   - task: AzureStaticWebApp@0
     displayName: "Deploy Allure report to Azure Static Web App"
     inputs:
@@ -170,11 +161,13 @@ jobs:
       skip_app_build: true
       azure_static_web_apps_api_token: "$(AZURE_STATIC_WEB_APPS_API_TOKEN)"
 
-  # Send Email AFTER deploy
+  # -------------------------
+  # UPDATED EMAIL STEP (dynamic JUnit discovery) - ONLY ONE EMAIL STEP
+  # -------------------------
   - powershell: |
       $ErrorActionPreference = "Stop"
-
       [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
       $smtpServer = "smtp.gmail.com"
       $smtpPort   = 587
       $smtpUser   = "$(SMTP_USER)"
@@ -186,17 +179,25 @@ jobs:
       $from = $smtpUser
       $to   = @("qa1@gmail.com","qa2@gmail.com")
 
-      # Job status (Ubuntu job)
-      $status = $env:AGENT_JOBSTATUS
-      if ([string]::IsNullOrWhiteSpace($status)) { $status = "Unknown" }
+      # Job 2 status (deploy job)
+      $deployStatus = $env:AGENT_JOBSTATUS
+      if ([string]::IsNullOrWhiteSpace($deployStatus)) { $deployStatus = "Unknown" }
 
-      # -------- JUnit summary (downloaded artifact) ----------
-      $junitPath = "$(Pipeline.Workspace)/pytest-junit.xml/pytest-junit.xml"
+      # -------- Find JUnit xml in downloaded artifact ----------
+      $artifactDir = "$(Pipeline.Workspace)/pytest-junit.xml"
+      $junitFile = Get-ChildItem -Path $artifactDir -Recurse -Filter "*.xml" -File -ErrorAction SilentlyContinue |
+                   Sort-Object LastWriteTime -Descending |
+                   Select-Object -First 1
+
       $tests = $passed = $failures = $errors = $skipped = 0
       $failedNames = @()
 
-      if (Test-Path $junitPath) {
+      if ($null -ne $junitFile) {
+        $junitPath = $junitFile.FullName
+        Write-Host "Using JUnit file: $junitPath"
+
         [xml]$j = Get-Content $junitPath
+
         $suiteNodes = @()
         if ($j.testsuite) { $suiteNodes = @($j.testsuite) }
         elseif ($j.testsuites -and $j.testsuites.testsuite) { $suiteNodes = @($j.testsuites.testsuite) }
@@ -222,7 +223,8 @@ jobs:
         if ($passed -lt 0) { $passed = 0 }
         $failedNames = $failedNames | Select-Object -First 10
       } else {
-        $failedNames = @("JUnit report not found at: $junitPath")
+        $junitPath = ""
+        $failedNames = @("JUnit report not found inside artifact folder: $artifactDir")
       }
 
       # Links
@@ -237,10 +239,21 @@ jobs:
         "",
         "POC UI Test execution is completed and Allure report is deployed.",
         "",
-        "Status   : $status",
-        "Pipeline : $env:BUILD_DEFINITIONNAME",
-        "Build #  : $env:BUILD_BUILDNUMBER",
-        "",
+        "Deploy Job Status : $deployStatus",
+        "Pipeline         : $env:BUILD_DEFINITIONNAME",
+        "Build #          : $env:BUILD_BUILDNUMBER",
+        ""
+      )
+
+      if ($junitPath) {
+        $lines += @(
+          "JUnit File Used:",
+          $junitPath,
+          ""
+        )
+      }
+
+      $lines += @(
         "Test Summary (Pytest):",
         "Total   : $tests",
         "Passed  : $passed",
@@ -254,7 +267,7 @@ jobs:
         $lines += "Top Failures (up to 10):"
         foreach ($f in $failedNames) { $lines += " - $f" }
         $lines += ""
-      } elseif ($failedNames.Count -gt 0) {
+      } else {
         $lines += "Note:"
         foreach ($f in $failedNames) { $lines += " - $f" }
         $lines += ""
@@ -282,7 +295,7 @@ jobs:
       Send-MailMessage `
         -From $from `
         -To $to `
-        -Subject "POC UI Tests - $status | Build $env:BUILD_BUILDNUMBER" `
+        -Subject "POC UI Tests | Build $env:BUILD_BUILDNUMBER" `
         -Body $body `
         -SmtpServer $smtpServer `
         -Port $smtpPort `
