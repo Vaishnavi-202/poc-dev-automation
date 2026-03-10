@@ -30,7 +30,7 @@ steps:
   displayName: "Run POC UI test cases (foreground)"
 
 # -------------------------
-# Allure: download portable CLI (no Chocolatey), generate HTML report, publish artifact
+# Allure: download portable CLI 
 # -------------------------
 - powershell: |
     $ErrorActionPreference = "Stop"
